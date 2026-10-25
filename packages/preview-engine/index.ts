@@ -1,11 +1,18 @@
 import { BaseComponent, css, customElement, html } from '@core';
 import { Icons, svgIcon } from '@ui';
-import { ExtractorRegistry } from './registry.ts';
-import type { ResolvedMedia } from './types.ts';
-import { LensViewer } from './viewer-overlay.ts';
+import type { ExtractorRegistry } from './registry.ts';
+import type { ChipPosition, ChipStyle, ResolvedMedia } from './types.ts';
+import type { LensViewer } from './viewer-overlay.ts';
 
 export { ExtractorRegistry } from './registry.ts';
-export type { ExtractorContext, LensExtractor, ResolvedMedia } from './types.ts';
+export type {
+  ChipPosition,
+  ChipStyle,
+  ExtractorContext,
+  LensExtractor,
+  LensPreferences,
+  ResolvedMedia,
+} from './types.ts';
 export { LensViewer } from './viewer-overlay.ts';
 
 @customElement('s-lens-trigger')
@@ -17,6 +24,8 @@ export class LensTrigger extends BaseComponent {
   #anchorEl: HTMLElement | null = null;
   #hideTimer: ReturnType<typeof setTimeout> | null = null;
   #hoveringSelf = false;
+  #chipPos: ChipPosition = 'top-right';
+  #chipStyle: ChipStyle = 'full';
 
   protected readonly stylesheet = css`
     :host {
@@ -44,13 +53,33 @@ export class LensTrigger extends BaseComponent {
       box-shadow: var(--s-shadow);
       font-size: 11px;
       font-weight: 600;
+      transition: transform 0.15s ease;
+
+      &:hover {
+        transform: scale(1.04);
+      }
+
+      &[data-style="icon-only"] {
+        padding: 6px;
+        .tag-label,
+        .mini-action {
+          display: none;
+        }
+      }
+
+      &[data-style="compact"] {
+        padding: 4px 10px;
+        .mini-action {
+          display: none;
+        }
+      }
     }
 
     .main-btn {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 2px 4px;
+      padding: 0;
       border: none;
       background: transparent;
       color: var(--s-text);
@@ -75,7 +104,9 @@ export class LensTrigger extends BaseComponent {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.15s, transform 0.15s;
+      transition:
+        background 0.15s,
+        transform 0.15s;
 
       &:hover {
         background: var(--s-accent);
@@ -84,6 +115,13 @@ export class LensTrigger extends BaseComponent {
       }
     }
   `;
+
+  configure(pos: ChipPosition, style: ChipStyle): void {
+    this.#chipPos = pos;
+    this.#chipStyle = style;
+    const bar = this.$<HTMLElement>('#toolbar');
+    if (bar) bar.setAttribute('data-style', style);
+  }
 
   attachTo(
     anchor: HTMLElement,
@@ -107,21 +145,47 @@ export class LensTrigger extends BaseComponent {
         : (anchor.querySelector<HTMLElement>('img') ?? anchor);
 
     const rect = visualTarget.getBoundingClientRect();
-    if (rect.width < 40 || rect.height < 40 || rect.bottom < 0 || rect.top > window.innerHeight) {
+    // if (rect.width < 20 || rect.height < 20 || rect.bottom < 0 || rect.top > window.innerHeight) {
+    if (rect.width < 16 || rect.height < 16 || rect.bottom < 0 || rect.top > window.innerHeight) {
       this.dismissImmediate();
       return;
     }
 
-    const top = Math.max(8, rect.top + 8);
-    const left = Math.max(8, Math.min(window.innerWidth - 165, rect.right - 155));
+    const isSmallAvatar = rect.width < 76 || rect.height < 76;
+    const bar = this.$<HTMLElement>('#toolbar');
+    const effectiveStyle: ChipStyle = isSmallAvatar ? 'icon-only' : this.#chipStyle;
+    if (bar) bar.setAttribute('data-style', effectiveStyle);
 
-    this.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
     const label = this.$<HTMLElement>('#tag-text');
     if (label) label.textContent = media.tag ?? 'HD ORIG';
 
     if (!this.matches(':popover-open')) {
       this.showPopover();
     }
+
+    const selfRect = this.getBoundingClientRect();
+    const chipW = selfRect.width || (effectiveStyle === 'icon-only' ? 30 : 120);
+    const chipH = selfRect.height || 28;
+
+    let top = rect.top + 6;
+    let left = rect.right - chipW - 6;
+
+    if (isSmallAvatar) {
+      top = Math.max(6, rect.top - 4);
+      left = Math.min(window.innerWidth - chipW - 6, rect.right - 10);
+    } else {
+      if (this.#chipPos.startsWith('bottom')) {
+        top = rect.bottom - chipH - 6;
+      }
+      if (this.#chipPos.endsWith('left')) {
+        left = rect.left + 6;
+      }
+    }
+
+    top = Math.max(6, Math.min(window.innerHeight - chipH - 6, top));
+    left = Math.max(6, Math.min(window.innerWidth - chipW - 6, left));
+
+    this.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
   }
 
   scheduleDismiss(): void {
@@ -141,8 +205,8 @@ export class LensTrigger extends BaseComponent {
     }
   }
 
-  get currentAnchor(): HTMLElement | null {
-    return this.#anchorEl;
+  get hasActiveTarget(): boolean {
+    return this.#anchorEl !== null && this.#activeMedia !== null;
   }
 
   async openCurrentMedia(): Promise<void> {
@@ -168,7 +232,9 @@ export class LensTrigger extends BaseComponent {
   protected render(): DocumentFragment {
     return html`
       <div
-        class='toolbar select-none'
+        id="toolbar"
+        class="toolbar select-none"
+        data-style=${this.#chipStyle}
         @pointerenter=${() => {
           this.#hoveringSelf = true;
           this.#clearHideTimer();
@@ -179,9 +245,9 @@ export class LensTrigger extends BaseComponent {
         }}
       >
         <button
-          type='button'
-          class='main-btn'
-          title='点击开启无损灯箱 (支持 ← → 方向键切换上下图)'
+          type="button"
+          class="main-btn"
+          title="点击开启无损灯箱 (支持 ← → 方向键切换上下图)"
           @click=${(e: MouseEvent) => {
             e.stopPropagation();
             e.preventDefault();
@@ -189,13 +255,13 @@ export class LensTrigger extends BaseComponent {
           }}
         >
           ${svgIcon(Icons.lens)}
-          <span id='tag-text'>HD ORIG</span>
+          <span id="tag-text" class="tag-label">HD ORIG</span>
         </button>
 
         <button
-          type='button'
-          class='mini-action'
-          title='在新标签页打开无损原图'
+          type="button"
+          class="mini-action"
+          title="在新标签页打开无损原图"
           @click=${(e: MouseEvent) => {
             e.stopPropagation();
             e.preventDefault();

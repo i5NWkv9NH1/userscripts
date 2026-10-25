@@ -1,10 +1,6 @@
 import { mkdir, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import {
-    inlineTemplateMinifierPlugin,
-    serializeMeta,
-    type UserScriptMeta,
-} from './meta.ts';
+import { inlineTemplateMinifierPlugin, serializeMeta, type UserScriptMeta } from './meta.ts';
 
 const ROOT_DIR = resolve(import.meta.dir, '..');
 const SITES_DIR = join(ROOT_DIR, 'sites');

@@ -9,15 +9,10 @@ declare function GM_removeValueChangeListener(listenerId: string | number): void
 export interface ReactiveStorage<T> {
   get(): T;
   set(next: T | ((prev: T) => T)): void;
-  subscribe(
-    callback: (val: T) => void,
-    signal: AbortSignal,
-    immediate?: boolean
-  ): void;
+  subscribe(callback: (val: T) => void, signal: AbortSignal, immediate?: boolean): void;
 }
 
-const hasGMStorage =
-  typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
+const hasGMStorage = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
 
 export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> {
   const localSubscribers = new Set<(val: T) => void>();
@@ -52,8 +47,7 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
     get: read,
     set(next) {
       const prev = read();
-      const resolved =
-        typeof next === 'function' ? (next as (p: T) => T)(prev) : next;
+      const resolved = typeof next === 'function' ? (next as (p: T) => T)(prev) : next;
       if (Object.is(prev, resolved)) return;
       write(resolved);
     },
@@ -64,24 +58,18 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
       let gmListenerId: string | number | null = null;
 
       if (hasGMStorage && typeof GM_addValueChangeListener === 'function') {
-        gmListenerId = GM_addValueChangeListener(
-          storageKey,
-          (_name, _oldVal, newVal, remote) => {
-            if (remote) {
-              callback((newVal as T) ?? initialValue);
-            }
+        gmListenerId = GM_addValueChangeListener(storageKey, (_name, _oldVal, newVal, remote) => {
+          if (remote) {
+            callback((newVal as T) ?? initialValue);
           }
-        );
+        });
       }
 
       signal.addEventListener(
         'abort',
         () => {
           localSubscribers.delete(callback);
-          if (
-            gmListenerId !== null &&
-            typeof GM_removeValueChangeListener === 'function'
-          ) {
+          if (gmListenerId !== null && typeof GM_removeValueChangeListener === 'function') {
             GM_removeValueChangeListener(gmListenerId);
           }
         },

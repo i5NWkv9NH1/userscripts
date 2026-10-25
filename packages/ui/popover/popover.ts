@@ -11,7 +11,7 @@ export class Popover extends BaseComponent {
   protected readonly stylesheet = css`
     :host {
       position: fixed;
-      inset: auto 24px 24px auto;
+      inset: auto 20px 20px auto;
       margin: 0;
       padding: 0;
       border: 1px solid var(--s-border);
@@ -21,35 +21,16 @@ export class Popover extends BaseComponent {
       -webkit-backdrop-filter: blur(24px) saturate(180%);
       color: var(--s-text);
       box-shadow: var(--s-shadow);
-      min-width: 330px;
+      width: 340px;
+      max-width: calc(100vw - 32px);
       opacity: 0;
-      transform: translateY(12px) scale(0.96);
+      transform: translateY(10px) scale(0.96);
       transition:
-        opacity 0.26s cubic-bezier(0.22, 1, 0.36, 1),
-        transform 0.26s cubic-bezier(0.22, 1, 0.36, 1),
-        inset 0.3s cubic-bezier(0.22, 1, 0.36, 1),
-        display 0.26s allow-discrete,
-        overlay 0.26s allow-discrete;
-    }
-
-    :host([data-pos='bottom-right']) {
-      inset: auto 24px 24px auto;
-      transform-origin: bottom right;
-    }
-
-    :host([data-pos='bottom-left']) {
-      inset: auto auto 24px 24px;
-      transform-origin: bottom left;
-    }
-
-    :host([data-pos='top-right']) {
-      inset: 24px 24px auto auto;
-      transform-origin: top right;
-    }
-
-    :host([data-pos='top-left']) {
-      inset: 24px auto auto 24px;
-      transform-origin: top left;
+        opacity 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+        transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+        inset 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+        display 0.24s allow-discrete,
+        overlay 0.24s allow-discrete;
     }
 
     :host(:popover-open) {
@@ -60,12 +41,12 @@ export class Popover extends BaseComponent {
     @starting-style {
       :host(:popover-open) {
         opacity: 0;
-        transform: translateY(12px) scale(0.95);
+        transform: translateY(10px) scale(0.95);
       }
     }
 
     .panel-header {
-      padding: 12px 16px;
+      padding: 11px 15px;
       border-bottom: 1px solid var(--s-border);
     }
 
@@ -78,7 +59,10 @@ export class Popover extends BaseComponent {
       background: transparent;
       color: var(--s-text-muted);
       cursor: pointer;
-      transition: background 0.15s, color 0.15s, transform 0.15s;
+      transition:
+        background 0.15s,
+        color 0.15s,
+        transform 0.15s;
 
       &:hover {
         background: var(--s-surface-hover);
@@ -89,25 +73,30 @@ export class Popover extends BaseComponent {
 
     .panel-body {
       padding: 14px 16px;
+      max-height: 78vh;
+      overflow-y: auto;
     }
   `;
 
-  setPosition(pos: DockPosition): void {
-    this.setAttribute('data-pos', pos);
+  get headerEl(): HTMLElement | null {
+    return this.$<HTMLElement>('.panel-header');
   }
 
   protected render(): DocumentFragment {
     return html`
-      <div class='panel-header flex items-center justify-between select-none'>
-        <div class='font-semibold text-sm flex items-center gap-2'>
-          <slot name='title'>Sora Panel</slot>
+      <div
+        class="panel-header flex items-center justify-between select-none"
+        title="按住标题栏可自由拖拽，松手自动磁吸至屏幕边缘"
+      >
+        <div class="font-semibold text-sm flex items-center gap-2">
+          <slot name="title">Sora Panel</slot>
         </div>
-        <div class='flex items-center gap-1'>
-          <slot name='header-actions'></slot>
+        <div class="flex items-center gap-1">
+          <slot name="header-actions"></slot>
           <button
-            class='icon-btn inline-flex items-center justify-center'
-            type='button'
-            title='收纳面板'
+            class="icon-btn inline-flex items-center justify-center"
+            type="button"
+            title="收纳为悬浮胶囊"
             @click=${() => {
               this.hidePopover();
               this.dispatchEvent(new CustomEvent('minimize', { bubbles: true, composed: true }));
@@ -117,7 +106,7 @@ export class Popover extends BaseComponent {
           </button>
         </div>
       </div>
-      <div class='panel-body flex flex-col gap-3'>
+      <div class="panel-body flex flex-col gap-3">
         <slot></slot>
       </div>
     `;
@@ -126,9 +115,6 @@ export class Popover extends BaseComponent {
   protected override onMount(): void {
     if (!this.hasAttribute('popover')) {
       this.setAttribute('popover', 'manual');
-    }
-    if (!this.hasAttribute('data-pos')) {
-      this.setAttribute('data-pos', 'bottom-right');
     }
   }
 }

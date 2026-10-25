@@ -105,7 +105,14 @@ export class GestureController implements Disposable {
 
     this.#scope.on(this.#target, 'pointerup', stopDrag);
     this.#scope.on(this.#target, 'pointercancel', stopDrag);
-    this.#scope.on(this.#stage, 'dblclick', () => this.reset());
+    // this.#scope.on(this.#stage, 'dblclick', () => this.reset());
+    this.#scope.on(this.#stage, 'dblclick', (ev) => {
+      const target = ev.composedPath()[0];
+      if (target instanceof Element && target.closest('button, .dock, .hud-top')) {
+        return;
+      }
+      this.reset();
+    });
   }
 
   #scheduleRender(): void {

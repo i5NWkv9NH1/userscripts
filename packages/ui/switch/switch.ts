@@ -23,7 +23,7 @@ export class Switch extends BaseComponent {
       cursor: pointer;
       transition: background 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 
-      &[aria-checked='true'] {
+      &[aria-checked="true"] {
         background: var(--s-accent);
         border-color: transparent;
       }
@@ -40,7 +40,7 @@ export class Switch extends BaseComponent {
       pointer-events: none;
     }
 
-    .track[aria-checked='true'] .thumb {
+    .track[aria-checked="true"] .thumb {
       transform: translateX(18px);
     }
   `;
@@ -60,9 +60,9 @@ export class Switch extends BaseComponent {
   protected render(): DocumentFragment {
     return html`
       <button
-        type='button'
-        role='switch'
-        class='track'
+        type="button"
+        role="switch"
+        class="track"
         aria-checked=${String(this.#checked)}
         @click=${() => {
           this.checked = !this.#checked;
@@ -75,7 +75,7 @@ export class Switch extends BaseComponent {
           );
         }}
       >
-        <span class='thumb'></span>
+        <span class="thumb"></span>
       </button>
     `;
   }

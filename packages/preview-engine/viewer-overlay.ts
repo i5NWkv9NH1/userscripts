@@ -1,16 +1,40 @@
-import {
-    BaseComponent,
-    createLogger,
-    css,
-    customElement,
-    html,
-    useHotkey,
-} from '@core';
+import { BaseComponent, createLogger, css, customElement, html, useHotkey } from '@core';
 import { Icons, svgIcon } from '@ui';
 import { GestureController } from './gesture-controller.ts';
 import type { ResolvedMedia } from './types.ts';
 
 const logger = createLogger('LensViewer');
+
+function formatFilename(
+  template: string,
+  mediaUrl: string,
+  width: number,
+  height: number,
+  ext: string
+): string {
+  const host = location.hostname.replace(/^www\./, '');
+  let rawName = 'image';
+  try {
+    const pathname = new URL(mediaUrl).pathname;
+    const lastSeg = pathname.split('/').filter(Boolean).pop() ?? 'image';
+    rawName = lastSeg.replace(/:[a-z0-9_]+$/i, '').split('.')[0] || 'image';
+  } catch {}
+
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
+  const time = now.toTimeString().slice(0, 8).replace(/:/g, '');
+
+  const rendered = (template.trim() || '{site}-{name}-{w}x{h}')
+    .replace(/\{site\}|%\{website\}%/gi, host)
+    .replace(/\{name\}|%\{name\}%/gi, rawName)
+    .replace(/\{w\}|%\{w\}%/gi, String(width || 0))
+    .replace(/\{h\}|%\{h\}%/gi, String(height || 0))
+    .replace(/\{date\}|%\{date\}%/gi, date)
+    .replace(/\{time\}|%\{time\}%/gi, time)
+    .replace(/\{ext\}|%\{ext\}%/gi, ext);
+
+  return rendered.endsWith(`.${ext}`) ? rendered : `${rendered}.${ext}`;
+}
 
 @customElement('s-lens-viewer')
 export class LensViewer extends BaseComponent {
@@ -19,6 +43,9 @@ export class LensViewer extends BaseComponent {
   #currentMedia: ResolvedMedia | null = null;
   #gallery: ResolvedMedia[] = [];
   #currentIndex = 0;
+  #filenameTemplate = '{site}-{name}-{w}x{h}';
+  #naturalW = 0;
+  #naturalH = 0;
 
   protected readonly stylesheet = css`
     :host {
@@ -108,7 +135,9 @@ export class LensViewer extends BaseComponent {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      transition: transform 0.15s ease, background 0.15s ease;
+      transition:
+        transform 0.15s ease,
+        background 0.15s ease;
       z-index: 2;
 
       &:hover {
@@ -117,8 +146,12 @@ export class LensViewer extends BaseComponent {
       }
     }
 
-    .nav-prev { left: 24px; }
-    .nav-next { right: 24px; }
+    .nav-prev {
+      left: 24px;
+    }
+    .nav-next {
+      right: 24px;
+    }
 
     .dock {
       position: absolute;
@@ -131,8 +164,14 @@ export class LensViewer extends BaseComponent {
       background: var(--s-bg);
       box-shadow: var(--s-shadow);
       z-index: 2;
+      flex-wrap: wrap;
+      max-width: 94vw;
     }
   `;
+
+  setFilenameTemplate(tpl: string): void {
+    this.#filenameTemplate = tpl;
+  }
 
   open(media: ResolvedMedia, gallery: ResolvedMedia[] = [media], index = 0): void {
     this.#gallery = gallery.length > 0 ? gallery : [media];
@@ -148,9 +187,20 @@ export class LensViewer extends BaseComponent {
 
   navigate(step: 1 | -1): void {
     if (this.#gallery.length <= 1) return;
-    this.#currentIndex =
-      (this.#currentIndex + step + this.#gallery.length) % this.#gallery.length;
+    this.#currentIndex = (this.#currentIndex + step + this.#gallery.length) % this.#gallery.length;
     this.#loadCurrentIndex();
+  }
+
+  #showStatus(msg: string): void {
+    const dimEl = this.$<HTMLElement>('#media-dim');
+    if (dimEl) {
+      dimEl.textContent = msg;
+      setTimeout(() => {
+        if (this.#naturalW > 0) {
+          dimEl.textContent = `${this.#naturalW} × ${this.#naturalH} px`;
+        }
+      }, 1800);
+    }
   }
 
   #loadCurrentIndex(): void {
@@ -173,7 +223,37 @@ export class LensViewer extends BaseComponent {
       idxEl.textContent = `${this.#currentIndex + 1} / ${this.#gallery.length}`;
     }
 
+    void this.#probeFileSize(media.originalUrl);
     this.#gesture?.reset();
+  }
+
+  async #probeFileSize(url: string): Promise<void> {
+    const sizeEl = this.$<HTMLElement>('#media-size');
+    if (!sizeEl) return;
+    sizeEl.textContent = '计算大小...';
+
+    const formatBytes = (bytes: number): string => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    };
+
+    try {
+      const res = await fetch(url, { method: 'HEAD' });
+      const len = Number(res.headers.get('content-length') ?? 0);
+      if (len > 0) {
+        sizeEl.textContent = formatBytes(len);
+        return;
+      }
+    } catch {}
+
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      sizeEl.textContent = formatBytes(blob.size);
+    } catch {
+      sizeEl.textContent = '未知大小';
+    }
   }
 
   async #downloadOriginal(): Promise<void> {
@@ -183,13 +263,22 @@ export class LensViewer extends BaseComponent {
     try {
       const res = await fetch(url);
       const blob = await res.blob();
+      const ext = (blob.type.split('/')[1] ?? 'jpg').replace('jpeg', 'jpg');
+      const filename = formatFilename(
+        this.#filenameTemplate,
+        url,
+        this.#naturalW,
+        this.#naturalH,
+        ext
+      );
+
       objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = objectUrl;
-      const ext = blob.type.split('/')[1] ?? 'jpg';
-      a.download = `sora-lens-${Date.now()}.${ext}`;
+      a.download = filename;
       a.click();
-      logger.success('无损原图下载成功，即将释放 Blob 内存');
+      this.#showStatus(`已保存：${filename}`);
+      logger.success(`原图已保存为：${filename}`);
     } catch {
       window.open(url, '_blank', 'noopener,noreferrer');
     } finally {
@@ -200,25 +289,44 @@ export class LensViewer extends BaseComponent {
     }
   }
 
+  async #copyOriginalUrl(): Promise<void> {
+    if (!this.#currentMedia) return;
+    try {
+      await navigator.clipboard.writeText(this.#currentMedia.originalUrl);
+      this.#showStatus('已复制无损原图链接！');
+    } catch {}
+  }
+
+  #searchByGoogleLens(): void {
+    if (!this.#currentMedia) return;
+    const encoded = encodeURIComponent(this.#currentMedia.originalUrl);
+    window.open(
+      `https://lens.google.com/uploadbyurl?url=${encoded}`,
+      '_blank',
+      'noopener,noreferrer'
+    );
+  }
+
   protected render(): DocumentFragment {
     return html`
       <div
-        id='stage'
-        class='stage'
+        id="stage"
+        class="stage"
         @click=${(e: MouseEvent) => {
           if (e.target === e.currentTarget) this.hidePopover();
         }}
       >
-        <div class='hud-top flex items-center justify-between'>
-          <div class='hud-pill flex items-center gap-2 text-xs'>
-            <span id='media-tag' class='s-badge'>ORIG</span>
-            <span id='gallery-idx' class='font-mono font-semibold'>1 / 1</span>
-            <span id='media-dim' class='font-mono text-muted'>0 × 0</span>
+        <div class="hud-top flex items-center justify-between">
+          <div class="hud-pill flex items-center gap-2 text-xs">
+            <span id="media-tag" class="s-badge">ORIG</span>
+            <span id="gallery-idx" class="font-mono font-semibold">1 / 1</span>
+            <span id="media-dim" class="font-mono text-muted">0 × 0</span>
+            <span id='media-size' class='font-mono text-muted'>-- KB</span>
             <span id='zoom-val' class='font-mono'>100%</span>
           </div>
           <button
-            type='button'
-            class='s-btn hud-pill'
+            type="button"
+            class="s-btn hud-pill"
             @click=${() => this.hidePopover()}
           >
             ${svgIcon(Icons.close)}
@@ -227,21 +335,23 @@ export class LensViewer extends BaseComponent {
         </div>
 
         <button
-          type='button'
-          class='nav-arrow nav-prev'
-          title='上一张 (← 或 ↑)'
+          type="button"
+          class="nav-arrow nav-prev"
+          title="上一张 (← 或 ↑)"
           @click=${() => this.navigate(-1)}
         >
           ${svgIcon(Icons.chevronLeft)}
         </button>
 
         <img
-          id='main-img'
-          class='canvas-img'
-          alt='Sora Lens Preview'
+          id="main-img"
+          class="canvas-img"
+          alt="Sora Lens Preview"
           @load=${(e: Event) => {
             const img = e.currentTarget as HTMLImageElement;
             img.style.opacity = '1';
+            this.#naturalW = img.naturalWidth;
+            this.#naturalH = img.naturalHeight;
             const dimEl = this.$<HTMLElement>('#media-dim');
             if (dimEl) {
               dimEl.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
@@ -250,40 +360,102 @@ export class LensViewer extends BaseComponent {
         />
 
         <button
-          type='button'
-          class='nav-arrow nav-next'
-          title='下一张 (→ 或 ↓)'
+          type="button"
+          class="nav-arrow nav-next"
+          title="下一张 (→ 或 ↓)"
           @click=${() => this.navigate(1)}
         >
           ${svgIcon(Icons.chevronRight)}
         </button>
 
-        <div class='dock flex items-center gap-2'>
-          <button type='button' class='s-btn' title='上一张 (←)' @click=${() => this.navigate(-1)}>
+        <div class="dock flex items-center gap-2">
+          <button
+            type="button"
+            class="s-btn"
+            title="上一张 (←)"
+            @click=${() => this.navigate(-1)}
+          >
             ${svgIcon(Icons.chevronLeft)}
           </button>
-          <button type='button' class='s-btn' title='下一张 (→)' @click=${() => this.navigate(1)}>
+          <button
+            type="button"
+            class="s-btn"
+            title="下一张 (→)"
+            @click=${() => this.navigate(1)}
+          >
             ${svgIcon(Icons.chevronRight)}
           </button>
-          <button type='button' class='s-btn' title='放大' @click=${() => this.#gesture?.zoomBy(1.25)}>
+          <button
+            type="button"
+            class="s-btn"
+            title="放大"
+            @click=${() => this.#gesture?.zoomBy(1.25)}
+          >
             ${svgIcon(Icons.zoomIn)}
           </button>
-          <button type='button' class='s-btn' title='缩小' @click=${() => this.#gesture?.zoomBy(0.8)}>
+          <button
+            type="button"
+            class="s-btn"
+            title="缩小"
+            @click=${() => this.#gesture?.zoomBy(0.8)}
+          >
             ${svgIcon(Icons.zoomOut)}
           </button>
-          <button type='button' class='s-btn' title='逆时针旋转 90°' @click=${() => this.#gesture?.rotateBy(-90)}>
+          <button
+            type="button"
+            class="s-btn"
+            title="逆时针旋转 90°"
+            @click=${() => this.#gesture?.rotateBy(-90)}
+          >
             ${svgIcon(Icons.rotateLeft)}
           </button>
-          <button type='button' class='s-btn' title='顺时针旋转 90°' @click=${() => this.#gesture?.rotateBy(90)}>
+          <button
+            type="button"
+            class="s-btn"
+            title="顺时针旋转 90°"
+            @click=${() => this.#gesture?.rotateBy(90)}
+          >
             ${svgIcon(Icons.rotateRight)}
           </button>
-          <button type='button' class='s-btn' title='水平镜像' @click=${() => this.#gesture?.toggleFlipX()}>
+          <button
+            type="button"
+            class="s-btn"
+            title="水平镜像"
+            @click=${() => this.#gesture?.toggleFlipX()}
+          >
             ${svgIcon(Icons.flipH)}
           </button>
-          <button type='button' class='s-btn' title='复位 1:1' @click=${() => this.#gesture?.reset()}>
+          <button
+            type="button"
+            class="s-btn"
+            title="复位 1:1"
+            @click=${() => this.#gesture?.reset()}
+          >
             ${svgIcon(Icons.reset)}
           </button>
-          <button type='button' class='s-btn s-btn-primary' @click=${() => this.#downloadOriginal()}>
+          <button
+            type="button"
+            class="s-btn"
+            title="复制无损原图直链"
+            @click=${() => this.#copyOriginalUrl()}
+          >
+            ${svgIcon(Icons.copy)}
+            <span>复制链接</span>
+          </button>
+          <button
+            type="button"
+            class="s-btn"
+            title="使用 Google Lens 以图搜图"
+            @click=${() => this.#searchByGoogleLens()}
+          >
+            ${svgIcon(Icons.search)}
+            <span>以图搜图</span>
+          </button>
+          <button
+            type="button"
+            class="s-btn s-btn-primary"
+            @click=${() => this.#downloadOriginal()}
+          >
             ${svgIcon(Icons.download)}
             <span>保存原图</span>
           </button>
@@ -306,31 +478,44 @@ export class LensViewer extends BaseComponent {
 
     useHotkey(
       {
-        Escape: () => {
-          if (this.matches(':popover-open')) this.hidePopover();
+        Escape: (ev) => {
+          if (!this.matches(':popover-open')) return false;
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          this.hidePopover();
+          return true;
         },
         ArrowLeft: (ev) => {
-          if (!this.matches(':popover-open')) return;
+          if (!this.matches(':popover-open')) return false;
           ev.preventDefault();
+          ev.stopImmediatePropagation();
           this.navigate(-1);
+          return true;
         },
         ArrowUp: (ev) => {
-          if (!this.matches(':popover-open')) return;
+          if (!this.matches(':popover-open')) return false;
           ev.preventDefault();
+          ev.stopImmediatePropagation();
           this.navigate(-1);
+          return true;
         },
         ArrowRight: (ev) => {
-          if (!this.matches(':popover-open')) return;
+          if (!this.matches(':popover-open')) return false;
           ev.preventDefault();
+          ev.stopImmediatePropagation();
           this.navigate(1);
+          return true;
         },
         ArrowDown: (ev) => {
-          if (!this.matches(':popover-open')) return;
+          if (!this.matches(':popover-open')) return false;
           ev.preventDefault();
+          ev.stopImmediatePropagation();
           this.navigate(1);
+          return true;
         },
       },
-      this.scope.signal
+      this.scope.signal,
+      { capture: true }
     );
   }
 

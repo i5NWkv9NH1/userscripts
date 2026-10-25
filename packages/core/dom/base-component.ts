@@ -2,7 +2,10 @@
 import { getAtomicThemeSheet } from '../composables/use-style.ts';
 import { bindFragmentEvents } from './template.ts';
 
-const sheetCache = new WeakMap<Function, CSSStyleSheet>();
+type ComponentConstructor = abstract new (...args: never[]) => BaseComponent;
+
+// const sheetCache = new WeakMap<Function, CSSStyleSheet>();
+const sheetCache = new WeakMap<ComponentConstructor, CSSStyleSheet>();
 
 export abstract class BaseComponent extends HTMLElement implements Disposable {
   declare readonly shadowRoot: ShadowRoot;
@@ -72,7 +75,7 @@ export abstract class BaseComponent extends HTMLElement implements Disposable {
   }
 
   private adoptComponentStyles(): void {
-    const ctor = this.constructor;
+    const ctor = this.constructor as ComponentConstructor;
     let sheet = sheetCache.get(ctor);
     if (!sheet) {
       sheet = new CSSStyleSheet();
@@ -83,20 +86,14 @@ export abstract class BaseComponent extends HTMLElement implements Disposable {
   }
 }
 
-export function defineComponent(
-  tagName: `s-${string}`,
-  ctor: CustomElementConstructor
-): void {
+export function defineComponent(tagName: `s-${string}`, ctor: CustomElementConstructor): void {
   if (!customElements.get(tagName)) {
     customElements.define(tagName, ctor);
   }
 }
 
 export function customElement(tagName: `s-${string}`) {
-  return function <T extends CustomElementConstructor>(
-    value: T,
-    _context: ClassDecoratorContext<T>
-  ) {
+  return <T extends CustomElementConstructor>(value: T, _context: ClassDecoratorContext<T>) => {
     defineComponent(tagName, value);
   };
 }

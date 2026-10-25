@@ -3,10 +3,10 @@ import type { LensExtractor } from '@preview';
 
 export const xExtractor: LensExtractor = {
   id: 'x-twitter',
-  name: 'X (Twitter) 媒体无损原图提取器',
+  name: 'X (Twitter) 原图与高清头像提取器',
   match: /(^|\.)(x|twitter)\.com$/i,
   selector:
-    '[data-testid="tweetPhoto"], article a[href*="/photo/"], [data-testid="card.wrapper"] img, img[src*="pbs.twimg.com/"]',
+    '[data-testid="tweetPhoto"], [data-testid^="UserAvatar-Container"], article a[href*="/photo/"], [data-testid="card.wrapper"] img, img[src*="pbs.twimg.com/"]',
   resolve(el) {
     const img =
       el instanceof HTMLImageElement
@@ -35,13 +35,23 @@ export const xExtractor: LensExtractor = {
 
     if (rawUrl.pathname.includes('/profile_images/')) {
       const originalUrl = rawSrc.replace(
-        /_(normal|bigger|mini|400x400|200x200)(\.[a-z0-9]+)$/i,
+        /_(normal|bigger|mini|x96|400x400|200x200)(\.[a-z0-9]+)$/i,
         '$2'
       );
       return {
         originalUrl,
         previewUrl: rawSrc,
-        tag: 'X · AVATAR RAW',
+        tag: 'X · AVATAR HD',
+        isAvatar: true,
+      };
+    }
+
+    if (rawUrl.pathname.includes('/profile_banners/')) {
+      const originalUrl = rawSrc.replace(/\/\d+x\d+$/, '/1500x500');
+      return {
+        originalUrl,
+        previewUrl: rawSrc,
+        tag: 'X · BANNER HD',
       };
     }
 

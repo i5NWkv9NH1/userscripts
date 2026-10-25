@@ -15,5 +15,5 @@ export const meta: UserScriptMeta = {
   ],
   'run-at': 'document-end',
   noframes: true,
-  "inject-into": 'content'
+  'inject-into': 'content',
 };

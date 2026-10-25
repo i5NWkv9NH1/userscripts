@@ -39,10 +39,7 @@ function buildTemplateElement(strings: TemplateStringsArray): HTMLTemplateElemen
   return tpl;
 }
 
-function valueToNode(
-  val: unknown,
-  collectedEvents: PendingEventBinding[]
-): Node {
+function valueToNode(val: unknown, collectedEvents: PendingEventBinding[]): Node {
   if (val === null || val === undefined || typeof val === 'boolean') {
     return document.createTextNode('');
   }
@@ -67,10 +64,7 @@ function valueToNode(
   return document.createTextNode(String(val));
 }
 
-export function html(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-): DocumentFragment {
+export function html(strings: TemplateStringsArray, ...values: unknown[]): DocumentFragment {
   let tpl = templateCache.get(strings);
   if (!tpl) {
     tpl = buildTemplateElement(strings);
@@ -150,10 +144,7 @@ export function html(
   return fragment;
 }
 
-export function bindFragmentEvents(
-  fragment: DocumentFragment,
-  signal: AbortSignal
-): void {
+export function bindFragmentEvents(fragment: DocumentFragment, signal: AbortSignal): void {
   const bindings = fragmentEvents.get(fragment);
   if (!bindings) return;
   for (const { el, type, listener } of bindings) {

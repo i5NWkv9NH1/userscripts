@@ -1,3 +1,4 @@
+// scripts/meta.ts
 import type { BunPlugin } from 'bun';
 
 export interface UserScriptMeta {
@@ -9,9 +10,11 @@ export interface UserScriptMeta {
   match: string[];
   grant: string[];
   'run-at'?: 'document-start' | 'document-body' | 'document-end' | 'document-idle';
-  connect?: string[];
-  noframes?: boolean;
   'inject-into'?: 'page' | 'content' | 'auto';
+  connect?: string[];
+  require?: string[];
+  resource?: string[];
+  noframes?: boolean;
 }
 
 export function serializeMeta(meta: UserScriptMeta): string {
@@ -29,11 +32,12 @@ export function serializeMeta(meta: UserScriptMeta): string {
   for (const m of meta.match) pushLine('match', m);
   for (const g of meta.grant) pushLine('grant', g);
   for (const c of meta.connect ?? []) pushLine('connect', c);
+  for (const r of meta.require ?? []) pushLine('require', r);
+  for (const res of meta.resource ?? []) pushLine('resource', res);
 
   if (meta['run-at']) pushLine('run-at', meta['run-at']);
-  if (meta.noframes) lines.push('// @noframes');
-
   if (meta['inject-into']) pushLine('inject-into', meta['inject-into']);
+  if (meta.noframes) lines.push('// @noframes');
 
   lines.push('// ==/UserScript==');
   return lines.join('\n');
@@ -104,27 +108,38 @@ export function createDevBridgeScript(meta: UserScriptMeta, site: string, port: 
 `;
 }
 
+function minifyCssString(raw: string): string {
+  return raw
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([{}:;,>+~])\s*/g, '$1')
+    .trim();
+}
+
 export const inlineTemplateMinifierPlugin: BunPlugin = {
   name: 'sora-inline-template-minifier',
   setup(build) {
+    build.onLoad({ filter: /\.css$/ }, async (args) => {
+      const rawCss = await Bun.file(args.path).text();
+      const minified = minifyCssString(rawCss);
+      return {
+        contents: `export default ${JSON.stringify(minified)};`,
+        loader: 'js',
+      };
+    });
+
     build.onLoad({ filter: /\.ts$/ }, async (args) => {
       let source = await Bun.file(args.path).text();
-      // 加上 \b 确保匹配的是独立的 html/css 标签函数
       source = source.replace(
         /\b(html|css)`([\s\S]*?)`/g,
         (_full, tag: string, content: string) => {
           let minified = content;
           if (tag === 'css') {
-            minified = minified
-              .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 CSS 注释
-              .replace(/\s+/g, ' ')
-              .replace(/\s*([{}:;,>+~])\s*/g, '$1') // 移除符号两侧空格
-              .trim();
+            minified = minifyCssString(content);
           } else if (tag === 'html') {
-            // HTML 压缩相对保守，避免破坏属性内的空格
-            minified = minified
-              .replace(/<!--[\s\S]*?-->/g, '') // 移除 HTML 注释
-              .replace(/>\s+</g, '><') // 移除标签之间的空白
+            minified = content
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/>\s+</g, '><')
               .trim();
           }
           return `${tag}\`${minified}\``;

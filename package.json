@@ -1,14 +1,17 @@
 {
-  "name": "userscripts",
-  "module": "main.ts",
+  "name": "sora-userscripts",
+  "private": true,
   "type": "module",
   "scripts": {
-    // "typecheck": "bun check",
     "dev": "bun run scripts/dev.ts",
     "build": "bun run scripts/build.ts",
-    "typecheck": "bun check"
+    "typecheck": "bun check",
+    "format": "biome format --write .",
+    "lint": "biome lint --write .",
+    "check": "biome check --write ."
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.3",
     "@types/bun": "latest",
     "@types/tampermonkey": "^5.5.0"
   },

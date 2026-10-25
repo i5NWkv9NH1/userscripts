@@ -1,5 +1,3 @@
-declare const unsafeWindow: Window | undefined;
-
 type LogLevel = 'info' | 'success' | 'warn' | 'error' | 'debug';
 
 const LEVEL_COLORS: Record<LogLevel, string> = {
@@ -10,9 +8,7 @@ const LEVEL_COLORS: Record<LogLevel, string> = {
   debug: '#8b5cf6',
 };
 
-const hostConsole: Console =
-  (typeof unsafeWindow !== 'undefined' && unsafeWindow?.console) ||
-  globalThis.console;
+const hostConsole: Console = globalThis.console;
 
 const rawLog = Function.prototype.bind.call(hostConsole.log, hostConsole);
 const rawWarn = Function.prototype.bind.call(hostConsole.warn, hostConsole);
@@ -33,16 +29,9 @@ export class SoraLogger {
     const badgeRight = `background:${color};color:#ffffff;padding:2px 6px;border-radius:0 4px 4px 0;font-weight:600;font-size:11px;`;
     const timeStyle = 'color:#71717a;font-size:11px;margin-left:4px;';
 
-    const printer =
-      level === 'error' ? rawError : level === 'warn' ? rawWarn : rawLog;
+    const printer = level === 'error' ? rawError : level === 'warn' ? rawWarn : rawLog;
 
-    printer(
-      `%cSora%c${this.#scope}%c ${time}`,
-      badgeLeft,
-      badgeRight,
-      timeStyle,
-      ...args
-    );
+    printer(`%cSora%c${this.#scope}%c ${time}`, badgeLeft, badgeRight, timeStyle, ...args);
   }
 
   info(...args: unknown[]): void {

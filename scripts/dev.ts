@@ -1,10 +1,13 @@
-import type { ServerWebSocket } from 'bun';
+// scripts/dev.ts
+
 import { watch } from 'node:fs';
 import { join, resolve } from 'node:path';
+import type { ServerWebSocket } from 'bun';
 import {
-    createDevBridgeScript,
-    serializeMeta,
-    type UserScriptMeta,
+  createDevBridgeScript,
+  inlineTemplateMinifierPlugin,
+  serializeMeta,
+  type UserScriptMeta,
 } from './meta.ts';
 
 const PORT = 3000;
@@ -14,17 +17,30 @@ const PACKAGES_DIR = join(ROOT_DIR, 'packages');
 
 const clients = new Set<ServerWebSocket<{ site: string }>>();
 
+const pollWaiters = new Set<(res: Response) => void>();
+
 function createHmrClientCode(site: string): string {
   return `;(() => {
   const KEY = '__sora_hmr_${site}__';
-  if (window[KEY]) return;
+  if (window[KEY] || typeof GM_xmlhttpRequest !== 'function') return;
   window[KEY] = true;
-  try {
-    const ws = new WebSocket('ws://localhost:${PORT}/__hmr?site=${site}');
-    ws.addEventListener('message', (ev) => {
-      if (ev.data === 'reload') location.reload();
+  const poll = () => {
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: 'http://localhost:${PORT}/__hmr_poll?site=${site}&t=' + Date.now(),
+      onload(res) {
+        if (res.status === 200 && res.responseText === 'reload') {
+          location.reload();
+        } else {
+          setTimeout(poll, 300);
+        }
+      },
+      onerror() {
+        setTimeout(poll, 2000);
+      }
     });
-  } catch {}
+  };
+  poll();
 })();`;
 }
 
@@ -52,6 +68,7 @@ async function compileSiteInMemory(site: string): Promise<string> {
     entrypoints: [entryPath],
     target: 'browser',
     format: 'iife',
+    plugins: [inlineTemplateMinifierPlugin],
     minify: false,
     sourcemap: 'inline',
   });
@@ -76,9 +93,17 @@ function setupWatcher(dir: string) {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       console.info(`[HMR] 检测到变更：${filename}，正在通知浏览器刷新...`);
-      for (const ws of clients) {
-        ws.send('reload');
+      for (const resolvePoll of pollWaiters) {
+        resolvePoll(
+          new Response('reload', {
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+              'Cache-Control': 'no-cache, no-store',
+            },
+          })
+        );
       }
+      pollWaiters.clear();
     }, 50);
   });
 }
@@ -88,13 +113,23 @@ setupWatcher(PACKAGES_DIR);
 
 Bun.serve<{ site: string }>({
   port: PORT,
-  async fetch(req, server) {
+  async fetch(req, _server) {
     const url = new URL(req.url);
 
-    if (url.pathname === '/__hmr') {
-      const site = url.searchParams.get('site') ?? 'all';
-      if (server.upgrade(req, { data: { site } })) return undefined;
-      return new Response('WebSocket 升级失败', { status: 400 });
+    if (url.pathname === '/__hmr_poll') {
+      return new Promise<Response>((resolvePoll) => {
+        pollWaiters.add(resolvePoll);
+        setTimeout(() => {
+          if (pollWaiters.has(resolvePoll)) {
+            pollWaiters.delete(resolvePoll);
+            resolvePoll(
+              new Response('keepalive', {
+                headers: { 'Access-Control-Allow-Origin': '*' },
+              })
+            );
+          }
+        }, 25000);
+      });
     }
 
     const devBridgeMatch = url.pathname.match(/^\/([a-zA-Z0-9_-]+)\.dev\.user\.js$/);

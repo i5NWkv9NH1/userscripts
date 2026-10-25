@@ -1,7 +1,4 @@
-export function css(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-): string {
+export function css(strings: TemplateStringsArray, ...values: unknown[]): string {
   let result = '';
   for (let i = 0; i < strings.length; i++) {
     result += strings[i];
@@ -17,7 +14,10 @@ const ATOMIC_THEME_CSS = css`
     color-scheme: light dark;
     --s-bg: light-dark(rgba(255, 255, 255, 0.86), rgba(20, 20, 26, 0.86));
     --s-surface: light-dark(rgba(244, 244, 248, 0.9), rgba(34, 34, 44, 0.85));
-    --s-surface-hover: light-dark(rgba(228, 228, 235, 0.95), rgba(48, 48, 62, 0.95));
+    --s-surface-hover: light-dark(
+      rgba(228, 228, 235, 0.95),
+      rgba(48, 48, 62, 0.95)
+    );
     --s-text: light-dark(#18181b, #f4f4f6);
     --s-text-muted: light-dark(#71717a, #a1a1aa);
     --s-border: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.12));
@@ -29,34 +29,81 @@ const ATOMIC_THEME_CSS = css`
       0 18px 40px -10px rgba(0, 0, 0, 0.14),
       0 20px 45px -10px rgba(0, 0, 0, 0.55)
     );
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+    font-family:
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "SF Pro Text",
+      sans-serif;
     color: var(--s-text);
     box-sizing: border-box;
   }
 
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     box-sizing: border-box;
   }
 
-  .flex { display: flex; }
-  .inline-flex { display: inline-flex; }
-  .flex-col { flex-direction: column; }
-  .items-center { align-items: center; }
-  .justify-between { justify-content: space-between; }
-  .justify-center { justify-content: center; }
-  .gap-1 { gap: 4px; }
-  .gap-2 { gap: 8px; }
-  .gap-3 { gap: 12px; }
-  .gap-4 { gap: 16px; }
-  .flex-1 { flex: 1 1 0%; }
-  .w-full { width: 100%; }
-  .text-xs { font-size: 11px; line-height: 1.4; }
-  .text-sm { font-size: 13px; line-height: 1.5; }
-  .font-medium { font-weight: 500; }
-  .font-semibold { font-weight: 600; }
-  .font-mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
-  .text-muted { color: var(--s-text-muted); }
-  .select-none { user-select: none; }
+  .flex {
+    display: flex;
+  }
+  .inline-flex {
+    display: inline-flex;
+  }
+  .flex-col {
+    flex-direction: column;
+  }
+  .items-center {
+    align-items: center;
+  }
+  .justify-between {
+    justify-content: space-between;
+  }
+  .justify-center {
+    justify-content: center;
+  }
+  .gap-1 {
+    gap: 4px;
+  }
+  .gap-2 {
+    gap: 8px;
+  }
+  .gap-3 {
+    gap: 12px;
+  }
+  .gap-4 {
+    gap: 16px;
+  }
+  .flex-1 {
+    flex: 1 1 0%;
+  }
+  .w-full {
+    width: 100%;
+  }
+  .text-xs {
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .text-sm {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .font-medium {
+    font-weight: 500;
+  }
+  .font-semibold {
+    font-weight: 600;
+  }
+  .font-mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .text-muted {
+    color: var(--s-text-muted);
+  }
+  .select-none {
+    user-select: none;
+  }
 
   .s-btn {
     display: inline-flex;
@@ -71,7 +118,10 @@ const ATOMIC_THEME_CSS = css`
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    transition:
+      background 0.15s,
+      border-color 0.15s,
+      transform 0.1s;
 
     &:hover {
       background: var(--s-surface-hover);

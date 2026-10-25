@@ -1,20 +1,22 @@
-export type HotkeyHandler = (ev: KeyboardEvent) => void;
+// biome-ignore lint/suspicious/noConfusingVoidType: void 作为函数返回类型表示返回值可忽略，是标准写法
+export type HotkeyHandler = (ev: KeyboardEvent) => void | boolean;
 export type HotkeyMap = Record<string, HotkeyHandler>;
 
 export interface UseHotkeyOptions {
   readonly target?: EventTarget;
   readonly ignoreInputs?: boolean;
   readonly preventDefault?: boolean;
+  readonly capture?: boolean;
 }
 
-function isEditableElement(el: EventTarget | null): boolean {
+export function isEditableElement(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   const tag = el.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
   return el.isContentEditable;
 }
 
-function normalizeEventCombo(ev: KeyboardEvent): {
+export function formatEventCombo(ev: KeyboardEvent): {
   byCode: string;
   byKey: string;
 } {
@@ -30,6 +32,16 @@ function normalizeEventCombo(ev: KeyboardEvent): {
   };
 }
 
+export function formatComboLabel(combo: string): string {
+  return combo
+    .replace('Mod+', '⌘/Ctrl + ')
+    .replace('Alt+', 'Alt + ')
+    .replace('Shift+', 'Shift + ')
+    .replace('Key', '')
+    .replace('Digit', '')
+    .replace('Backquote', '`');
+}
+
 export function useHotkey(
   keymap: HotkeyMap,
   signal: AbortSignal,
@@ -37,11 +49,7 @@ export function useHotkey(
 ): void {
   if (signal.aborted) return;
 
-  const {
-    target = window,
-    ignoreInputs = true,
-    preventDefault = false,
-  } = options;
+  const { target = window, ignoreInputs = true, preventDefault = false, capture = true } = options;
 
   target.addEventListener(
     'keydown',
@@ -53,14 +61,17 @@ export function useHotkey(
         if (isEditableElement(topTarget)) return;
       }
 
-      const { byCode, byKey } = normalizeEventCombo(ev);
+      const { byCode, byKey } = formatEventCombo(ev);
       const handler = keymap[byCode] ?? keymap[byKey] ?? keymap[ev.key] ?? keymap[ev.code];
 
       if (handler) {
-        if (preventDefault) ev.preventDefault();
-        handler(ev);
+        const result = handler(ev);
+        if (result !== false && preventDefault) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+        }
       }
     },
-    { signal }
+    { signal, capture }
   );
 }

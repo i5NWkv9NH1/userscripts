@@ -14,9 +14,7 @@ export class ExtractorRegistry {
   getActiveExtractors(currentUrl = new URL(location.href)): LensExtractor[] {
     if (this.#activeExtractors) return this.#activeExtractors;
     this.#activeExtractors = this.#extractors.filter((ext) =>
-      typeof ext.match === 'function'
-        ? ext.match(currentUrl)
-        : ext.match.test(currentUrl.hostname)
+      typeof ext.match === 'function' ? ext.match(currentUrl) : ext.match.test(currentUrl.hostname)
     );
     return this.#activeExtractors;
   }
@@ -40,9 +38,11 @@ export class ExtractorRegistry {
     return resolved;
   }
 
-  async resolveFromHoverTarget(
-    rawTarget: EventTarget | null
-  ): Promise<{ anchorEl: HTMLElement; media: ResolvedMedia; extractor: LensExtractor } | null> {
+  async resolveFromHoverTarget(rawTarget: EventTarget | null): Promise<{
+    anchorEl: HTMLElement;
+    media: ResolvedMedia;
+    extractor: LensExtractor;
+  } | null> {
     if (!(rawTarget instanceof HTMLElement)) return null;
 
     const currentUrl = new URL(location.href);
