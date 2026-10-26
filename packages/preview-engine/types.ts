@@ -26,6 +26,7 @@ export interface LensExtractor {
   readonly name: string;
   readonly match: RegExp | ((url: URL) => boolean);
   readonly selector: string;
+  readonly isFallback?: boolean;
   resolve(
     element: HTMLElement,
     ctx: ExtractorContext

@@ -98,10 +98,11 @@ export class Popover extends BaseComponent {
             type="button"
             title="收纳为悬浮胶囊"
             @click=${() => {
-              this.hidePopover();
+              if (this.matches(':popover-open')) {
+                this.hidePopover();
+              }
               this.dispatchEvent(new CustomEvent('minimize', { bubbles: true, composed: true }));
-            }}
-          >
+            }}>
             ${svgIcon(Icons.minimize)}
           </button>
         </div>

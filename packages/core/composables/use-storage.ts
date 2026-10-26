@@ -14,9 +14,20 @@ export interface ReactiveStorage<T> {
 
 const hasGMStorage = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
 
+const subscribersByKey = new Map<string, Set<(val: any) => void>>();
+
+function getSubscriberSet(storageKey: string): Set<(val: any) => void> {
+  let set = subscribersByKey.get(storageKey);
+  if (!set) {
+    set = new Set();
+    subscribersByKey.set(storageKey, set);
+  }
+  return set;
+}
+
 export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> {
-  const localSubscribers = new Set<(val: T) => void>();
   const storageKey = `sora:${key}`;
+  const subscribers = getSubscriberSet(storageKey);
 
   const read = (): T => {
     if (hasGMStorage) {
@@ -38,8 +49,10 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
         localStorage.setItem(storageKey, JSON.stringify(val));
       } catch {}
     }
-    for (const sub of localSubscribers) {
-      sub(val);
+    for (const sub of subscribers) {
+      try {
+        sub(val);
+      } catch {}
     }
   };
 
@@ -54,13 +67,15 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
     subscribe(callback, signal, immediate = true) {
       if (signal.aborted) return;
 
-      localSubscribers.add(callback);
+      subscribers.add(callback);
       let gmListenerId: string | number | null = null;
 
       if (hasGMStorage && typeof GM_addValueChangeListener === 'function') {
         gmListenerId = GM_addValueChangeListener(storageKey, (_name, _oldVal, newVal, remote) => {
           if (remote) {
-            callback((newVal as T) ?? initialValue);
+            try {
+              callback((newVal as T) ?? initialValue);
+            } catch {}
           }
         });
       }
@@ -68,7 +83,10 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
       signal.addEventListener(
         'abort',
         () => {
-          localSubscribers.delete(callback);
+          subscribers.delete(callback);
+          if (subscribers.size === 0) {
+            subscribersByKey.delete(storageKey);
+          }
           if (gmListenerId !== null && typeof GM_removeValueChangeListener === 'function') {
             GM_removeValueChangeListener(gmListenerId);
           }
@@ -77,7 +95,9 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
       );
 
       if (immediate) {
-        callback(read());
+        try {
+          callback(read());
+        } catch {}
       }
     },
   };

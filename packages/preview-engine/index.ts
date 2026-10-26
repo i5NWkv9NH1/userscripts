@@ -289,4 +289,8 @@ export class LensTrigger extends BaseComponent {
       { capture: true, passive: true }
     );
   }
+
+  protected override onDestroy(): void {
+    this.#clearHideTimer();
+  }
 }

@@ -14,6 +14,9 @@ export abstract class BaseComponent extends HTMLElement implements Disposable {
   protected abstract readonly stylesheet: string;
   protected abstract render(): DocumentFragment;
 
+  // # DeepSeek 修改
+  #rendered: boolean = false;
+
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -22,7 +25,13 @@ export abstract class BaseComponent extends HTMLElement implements Disposable {
   connectedCallback(): void {
     if (this.scope.signal.aborted) {
       this.scope = new AbortController();
+      // # DeepSeek 修改
+      this.#rendered = false;
     }
+
+    // # DeepSeek 修改
+    if (this.#rendered) return;
+    this.#rendered = true;
 
     this.adoptComponentStyles();
     const fragment = this.render();
@@ -32,7 +41,11 @@ export abstract class BaseComponent extends HTMLElement implements Disposable {
   }
 
   disconnectedCallback(): void {
-    this[Symbol.dispose]();
+    queueMicrotask(() => {
+      if (!this.isConnected) {
+        this[Symbol.dispose]();
+      }
+    });
   }
 
   [Symbol.dispose](): void {
@@ -40,6 +53,8 @@ export abstract class BaseComponent extends HTMLElement implements Disposable {
       this.scope.abort();
       this.onDestroy();
     }
+    // # DeepSeek 修改
+    this.#rendered = false;
   }
 
   protected onMount(): void {}

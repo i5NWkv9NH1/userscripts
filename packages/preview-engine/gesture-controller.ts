@@ -47,7 +47,8 @@ export class GestureController implements Disposable {
   }
 
   rotateBy(deg: number): void {
-    this.#state.rotate += deg;
+    // this.#state.rotate += deg;
+    this.#state.rotate = (this.#state.rotate + deg) % 360;
     this.#scheduleRender();
   }
 
@@ -80,7 +81,8 @@ export class GestureController implements Disposable {
     );
 
     this.#scope.on(this.#target, 'pointerdown', (ev) => {
-      if (ev.button !== 0) return;
+      // if (ev.button !== 0) return;
+      if (!ev.isPrimary || ev.button !== 0) return;
       ev.preventDefault();
       this.#dragging = true;
       this.#startX = ev.clientX - this.#state.x;

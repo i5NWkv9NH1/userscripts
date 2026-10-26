@@ -1,4 +1,5 @@
-export type HotkeyHandler = (ev: KeyboardEvent) => undefined | boolean;
+// biome-ignore lint/suspicious/noConfusingVoidType: allow handlers without explicit boolean return
+export type HotkeyHandler = (ev: KeyboardEvent) => void | boolean;
 export type HotkeyMap = Record<string, HotkeyHandler>;
 
 export interface UseHotkeyOptions {
@@ -8,7 +9,11 @@ export interface UseHotkeyOptions {
   readonly capture?: boolean;
 }
 
-const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+const platformStr =
+  (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+  navigator.platform ??
+  '';
+const isMac = /Mac|iPhone|iPad|iPod/i.test(platformStr);
 
 export function isEditableElement(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -66,8 +71,11 @@ export function useHotkey(
         if (isEditableElement(topTarget)) return;
       }
 
-      const { byCode, byKey } = formatEventCombo(ev);
-      const handler = keymap[byCode] ?? keymap[byKey] ?? keymap[ev.key] ?? keymap[ev.code];
+      const { byCode, byKey, hasModifier } = formatEventCombo(ev);
+      const handler =
+        keymap[byCode] ??
+        keymap[byKey] ??
+        (!hasModifier ? (keymap[ev.key] ?? keymap[ev.code]) : undefined);
 
       if (handler) {
         const result = handler(ev);

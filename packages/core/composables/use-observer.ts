@@ -1,8 +1,9 @@
+// packages/core/composables/use-observer.ts
 export function useObserver(
   target: Node,
   callback: (addedElements: HTMLElement[]) => void,
   signal: AbortSignal,
-  options: MutationObserverInit = { childList: true, subtree: true }
+  options?: MutationObserverInit
 ): void {
   if (signal.aborted) return;
 
@@ -12,16 +13,18 @@ export function useObserver(
   const flush = () => {
     rafId = null;
     if (signal.aborted || pending.size === 0) return;
-    const batch = Array.from(pending);
+    const batch = Array.from(pending).filter((el) => el.isConnected);
     pending.clear();
-    callback(batch);
+    if (batch.length > 0) {
+      callback(batch);
+    }
   };
 
   const observer = new MutationObserver((records) => {
     for (const record of records) {
       for (const node of record.addedNodes) {
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          pending.add(node as HTMLElement);
+        if (node instanceof HTMLElement) {
+          pending.add(node);
         }
       }
     }
@@ -30,7 +33,11 @@ export function useObserver(
     }
   });
 
-  observer.observe(target, options);
+  observer.observe(target, {
+    childList: true,
+    subtree: true,
+    ...options,
+  });
 
   signal.addEventListener(
     'abort',

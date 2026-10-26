@@ -2,29 +2,59 @@ import type { LensExtractor, ResolvedMedia } from './types.ts';
 
 export class ExtractorRegistry {
   readonly #extractors: LensExtractor[] = [];
-  readonly #cache = new WeakMap<Element, ResolvedMedia>();
+  readonly #cache = new WeakMap<Element, Map<string, ResolvedMedia>>();
+  // # DeekSeep 修改
+  #cachedKey: string = '';
+
   #activeExtractors: LensExtractor[] | null = null;
 
   register(...items: LensExtractor[]): this {
     this.#extractors.push(...items);
     this.#activeExtractors = null;
+    // # DeekSeep 修改
+    this.#cachedKey = '';
     return this;
   }
 
+  // # DeekSeep 修改
   getActiveExtractors(currentUrl = new URL(location.href)): LensExtractor[] {
-    if (this.#activeExtractors) return this.#activeExtractors;
-    this.#activeExtractors = this.#extractors.filter((ext) =>
-      typeof ext.match === 'function' ? ext.match(currentUrl) : ext.match.test(currentUrl.hostname)
-    );
+    const key = currentUrl.hostname + currentUrl.pathname;
+    if (this.#activeExtractors && this.#cachedKey === key) {
+      return this.#activeExtractors;
+    }
+    this.#cachedKey = key;
+    this.#activeExtractors = this.#extractors
+      .filter((ext) =>
+        typeof ext.match === 'function'
+          ? ext.match(currentUrl)
+          : ext.match.test(currentUrl.hostname)
+      )
+      .sort((a, b) => Number(Boolean(a.isFallback)) - Number(Boolean(b.isFallback)));
     return this.#activeExtractors;
   }
+
+  // getActiveExtractors(currentUrl = new URL(location.href)): LensExtractor[] {
+  //   if (this.#activeExtractors && this.#cachedHost === currentUrl.hostname) {
+  //     return this.#activeExtractors;
+  //   }
+  //   this.#cachedHost = currentUrl.hostname;
+  //   this.#activeExtractors = this.#extractors
+  //     .filter((ext) =>
+  //       typeof ext.match === 'function'
+  //         ? ext.match(currentUrl)
+  //         : ext.match.test(currentUrl.hostname)
+  //     )
+  //     .sort((a, b) => Number(Boolean(a.isFallback)) - Number(Boolean(b.isFallback)));
+  //   return this.#activeExtractors;
+  // }
 
   async resolveElement(
     matchedEl: HTMLElement,
     extractor: LensExtractor,
     currentUrl = new URL(location.href)
   ): Promise<ResolvedMedia | null> {
-    const cached = this.#cache.get(matchedEl);
+    let elMap = this.#cache.get(matchedEl);
+    const cached = elMap?.get(extractor.id);
     if (cached) return cached;
 
     const resolved = await extractor.resolve(matchedEl, {
@@ -33,16 +63,18 @@ export class ExtractorRegistry {
     });
 
     if (resolved) {
-      this.#cache.set(matchedEl, resolved);
+      if (!elMap) {
+        elMap = new Map();
+        this.#cache.set(matchedEl, elMap);
+      }
+      elMap.set(extractor.id, resolved);
     }
     return resolved;
   }
 
-  async resolveFromHoverTarget(rawTarget: EventTarget | null): Promise<{
-    anchorEl: HTMLElement;
-    media: ResolvedMedia;
-    extractor: LensExtractor;
-  } | null> {
+  async resolveFromHoverTarget(
+    rawTarget: EventTarget | null
+  ): Promise<{ anchorEl: HTMLElement; media: ResolvedMedia; extractor: LensExtractor } | null> {
     if (!(rawTarget instanceof HTMLElement)) return null;
 
     const currentUrl = new URL(location.href);
@@ -71,15 +103,17 @@ export class ExtractorRegistry {
     const items: ResolvedMedia[] = [];
 
     for (const extractor of active) {
-      const nodes = document.querySelectorAll<HTMLElement>(extractor.selector);
-      for (const node of nodes) {
-        const media = await this.resolveElement(node, extractor, currentUrl);
+      const nodes = Array.from(document.querySelectorAll<HTMLElement>(extractor.selector));
+      const resolvedList = await Promise.all(
+        nodes.map((node) => this.resolveElement(node, extractor, currentUrl))
+      );
+      for (const media of resolvedList) {
         if (media && !seenUrls.has(media.originalUrl)) {
           seenUrls.add(media.originalUrl);
           items.push(media);
         }
       }
-      if (items.length > 0 && extractor.id !== 'universal-hd') break;
+      if (items.length > 0 && !extractor.isFallback) break;
     }
 
     if (!seenUrls.has(currentMedia.originalUrl)) {

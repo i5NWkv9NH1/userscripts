@@ -16,13 +16,17 @@ export type SnapPresetName =
   | 'bottom-left'
   | 'bottom-right';
 
+const VIEWPORT_PADDING = 8;
+const SNAP_EDGE_MARGIN = 20;
+const DRAG_THRESHOLD_PX = 6;
+
 const PRESET_COORDS: Record<SnapPresetName, SnapCoordinate> = {
-  'top-left': { side: 'left', yRatio: 0.04, margin: 20 },
-  'top-right': { side: 'right', yRatio: 0.04, margin: 20 },
-  'center-left': { side: 'left', yRatio: 0.45, margin: 20 },
-  'center-right': { side: 'right', yRatio: 0.45, margin: 20 },
-  'bottom-left': { side: 'left', yRatio: 0.88, margin: 20 },
-  'bottom-right': { side: 'right', yRatio: 0.88, margin: 20 },
+  'top-left': { side: 'left', yRatio: 0.04, margin: SNAP_EDGE_MARGIN },
+  'top-right': { side: 'right', yRatio: 0.04, margin: SNAP_EDGE_MARGIN },
+  'center-left': { side: 'left', yRatio: 0.45, margin: SNAP_EDGE_MARGIN },
+  'center-right': { side: 'right', yRatio: 0.45, margin: SNAP_EDGE_MARGIN },
+  'bottom-left': { side: 'left', yRatio: 0.88, margin: SNAP_EDGE_MARGIN },
+  'bottom-right': { side: 'right', yRatio: 0.88, margin: SNAP_EDGE_MARGIN },
 };
 
 export interface SnapPositionController {
@@ -30,10 +34,10 @@ export interface SnapPositionController {
   applyPreset(preset: SnapPresetName): void;
   bindDragHandle(
     handleEl: HTMLElement,
-    FloatingTargets: HTMLElement[],
+    floatingTargets: HTMLElement[],
     onClickWithoutDrag?: (ev: PointerEvent) => void
   ): void;
-  syncTargets(targets: HTMLElement[]): void;
+  syncTargets(targets?: HTMLElement[]): void;
 }
 
 export function useSnapPosition(
@@ -41,6 +45,18 @@ export function useSnapPosition(
   defaultPreset: SnapPresetName,
   signal: AbortSignal
 ): SnapPositionController {
+  // # DeepSeek 修改
+  let dragSessionAbort: AbortController | null = null;
+
+  signal.addEventListener(
+    'abort',
+    () => {
+      dragSessionAbort?.abort();
+      dragSessionAbort = null;
+    },
+    { once: true }
+  );
+
   const hostKey = location.hostname || 'global';
   const siteStore = useStorage<SnapCoordinate>(
     `pos.${moduleId}.${hostKey}`,
@@ -64,10 +80,10 @@ export function useSnapPosition(
 
   let trackedTargets: HTMLElement[] = [];
 
-  const syncTargets = (targets: HTMLElement[] = trackedTargets) => {
-    trackedTargets = targets;
+  const syncTargets = (targets?: HTMLElement[]) => {
+    if (targets) trackedTargets = targets;
     const coord = siteStore.get();
-    for (const t of targets) {
+    for (const t of trackedTargets) {
       applyCoordToElement(t, coord);
     }
   };
@@ -88,116 +104,179 @@ export function useSnapPosition(
       siteStore.set(next);
       syncTargets();
     },
-    bindDragHandle(handleEl, targets, onClickWithoutDrag) {
-      trackedTargets = targets;
-      let startX = 0;
-      let startY = 0;
-      let initialLeft = 0;
-      let initialTop = 0;
-      let moved = false;
-      let dragging = false;
-      let activeBox: HTMLElement | null = null;
-
+    bindDragHandle(handleEl, floatingTargets, onClickWithoutDrag) {
+      trackedTargets = floatingTargets;
       handleEl.style.touchAction = 'none';
       handleEl.style.cursor = 'grab';
 
-      const resetDragState = () => {
-        dragging = false;
-        handleEl.style.cursor = 'grab';
-        if (activeBox) activeBox.style.transition = '';
-      };
+      // # DeepSeek 建议，移到顶部，bindDragHandle 里只引用这个共享变量。
+      // let dragSessionAbort: AbortController | null = null;
+
+      // * 这段每次调 bindDragHandle 都会往同一个 signal 上再挂一个监听器。功能上没问题（都做同一件事），但多次调用会累积。如果想彻底干净，把这段也挪到 useSnapPosition 函数顶层、return 之前，和 resize 监听放一起。不改也不影响正确性，只是个小泄漏
+      // signal.addEventListener(
+      //   'abort',
+      //   () => {
+      //     dragSessionAbort?.abort();
+      //     dragSessionAbort = null;
+      //   },
+      //   { once: true }
+      // );
 
       handleEl.addEventListener(
         'pointerdown',
-        (ev) => {
-          if (ev.button !== 0) return;
-          const composedTarget = ev.composedPath()[0];
+        (downEv) => {
+          if (!downEv.isPrimary || downEv.button !== 0) return;
+          const composedTarget = downEv.composedPath()[0];
           const interactiveEl =
             composedTarget instanceof Element
               ? composedTarget.closest('button, input, select, s-switch')
               : null;
 
-          // ! 关键修复 1：
-          // # 只有点在「非手柄自身的内部子按钮」上才跳过，点在胶囊内部的文字/图标上正常放行！
           if (interactiveEl && interactiveEl !== handleEl) {
             return;
           }
 
-          activeBox = targets.find((t) => t.matches(':popover-open')) ?? targets[0] ?? null;
+          const activeBox =
+            trackedTargets.find((t) => t.matches(':popover-open')) ?? trackedTargets[0] ?? null;
           if (!activeBox) return;
 
+          dragSessionAbort?.abort();
+          dragSessionAbort = new AbortController();
+          const dragSignal = dragSessionAbort.signal;
+
           const rect = activeBox.getBoundingClientRect();
-          startX = ev.clientX;
-          startY = ev.clientY;
-          initialLeft = rect.left;
-          initialTop = rect.top;
-          moved = false;
-          dragging = true;
+          const startX = downEv.clientX;
+          const startY = downEv.clientY;
+          const initialLeft = rect.left;
+          const initialTop = rect.top;
+          const boxW = rect.width;
+          const boxH = rect.height;
+
+          // # DeepSeek 修复
+          // * pointerdown 里 const boxH = rect.height; 之后加
+          try {
+            handleEl.setPointerCapture(downEv.pointerId);
+          } catch {}
+
+          let moved = false;
+          let rafId: number | null = null;
+          let pendingLeft = initialLeft;
+          let pendingTop = initialTop;
+
+          // # DeepSeek 修改
+          // * cleanupSession 里 handleEl.style.cursor = 'grab'; 之前加
+          const cleanupSession = () => {
+            if (rafId !== null) {
+              cancelAnimationFrame(rafId);
+              rafId = null;
+            }
+
+            try {
+              if (handleEl.hasPointerCapture(downEv.pointerId)) {
+                handleEl.releasePointerCapture(downEv.pointerId);
+              }
+            } catch {}
+
+            handleEl.style.cursor = 'grab';
+            activeBox.style.transition = '';
+            dragSessionAbort?.abort();
+            dragSessionAbort = null;
+          };
+
+          // # DeekSeep 修改
+          // * 在 finishPointer 定义之前加一行 let finished = false;，函数体第一行加守卫：
+          // * 因为改完后 finishPointer 会从 pointermove 和 pointerup 两个入口被调用，必须保证吸附只跑一次。
+          let finished = false;
+          // * 把 finishPointer 整段挪到 pointermove 之前
+          const finishPointer = (upEv: PointerEvent) => {
+            if (finished) return;
+            finished = true;
+
+            const wasMoved = moved;
+            cleanupSession();
+
+            if (!wasMoved) {
+              onClickWithoutDrag?.(upEv);
+              return;
+            }
+
+            // const finalRect = activeBox.getBoundingClientRect();
+            // const centerX = finalRect.left + finalRect.width / 2;
+            // const side: SnapSide = centerX < window.innerWidth / 2 ? 'left' : 'right';
+            // const yRatio = Number(
+            //   Math.max(
+            //     0.02,
+            //     Math.min(0.92, finalRect.top / Math.max(1, window.innerHeight))
+            //   ).toFixed(4)
+            // );
+
+            // # DeepSeek 修改
+            // * 用 pending 值代替 getBoundingClientRect，避免 rAF 未 flush 的旧 rect
+            const centerX = pendingLeft + boxW / 2;
+            const side: SnapSide = centerX < window.innerWidth / 2 ? 'left' : 'right';
+            const yRatio = Number(
+              Math.max(0.02, Math.min(0.92, pendingTop / Math.max(1, window.innerHeight))).toFixed(
+                4
+              )
+            );
+
+            siteStore.set({ side, yRatio, margin: SNAP_EDGE_MARGIN });
+            syncTargets();
+          };
+
+          window.addEventListener(
+            'pointermove',
+            (moveEv) => {
+              // # DeepSeek 修改
+              // ? pointermove 的 buttons === 0 分支改为调用 finishPointer
+              // * 这是核心修复。浏览器经常在真正的 pointerup 之前先派发一个 buttons 已为 0 的 pointermove
+              // * 原来的 cleanupSession() 会 abort 掉 dragSignal，把 pointerup 监听器一起移走，导致 finishPointer 永远不执行
+              // * 改成直接调 finishPointer，不管哪个先到，吸附都会触发
+
+              // if ((moveEv.buttons & 1) === 0) {
+              //   cleanupSession();
+              //   return;
+              // }
+              if ((moveEv.buttons & 1) === 0) {
+                finishPointer(moveEv);
+                return;
+              }
+
+              const dx = moveEv.clientX - startX;
+              const dy = moveEv.clientY - startY;
+
+              if (!moved && Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
+                moved = true;
+                handleEl.style.cursor = 'grabbing';
+                activeBox.style.transition = 'none';
+              }
+
+              if (moved) {
+                pendingLeft = Math.max(
+                  VIEWPORT_PADDING,
+                  Math.min(window.innerWidth - boxW - VIEWPORT_PADDING, initialLeft + dx)
+                );
+                pendingTop = Math.max(
+                  VIEWPORT_PADDING,
+                  Math.min(window.innerHeight - boxH - VIEWPORT_PADDING, initialTop + dy)
+                );
+
+                if (rafId === null) {
+                  rafId = requestAnimationFrame(() => {
+                    rafId = null;
+                    activeBox.style.inset = `${Math.round(pendingTop)}px auto auto ${Math.round(pendingLeft)}px`;
+                  });
+                }
+              }
+            },
+            { signal: dragSignal, passive: true }
+          );
+
+          window.addEventListener('pointerup', finishPointer, { signal: dragSignal });
+          window.addEventListener('pointercancel', finishPointer, { signal: dragSignal });
         },
         { signal }
       );
-
-      // ! 关键修复 2
-      // # 将 pointermove 与 pointerup 挂载到 window，并校验 ev.buttons，彻底杜绝松手丢失导致胶囊粘鼠标
-      window.addEventListener(
-        'pointermove',
-        (ev) => {
-          if (!dragging || !activeBox) return;
-          if ((ev.buttons & 1) === 0) {
-            resetDragState();
-            return;
-          }
-
-          const dx = ev.clientX - startX;
-          const dy = ev.clientY - startY;
-
-          if (!moved && Math.hypot(dx, dy) > 6) {
-            moved = true;
-            handleEl.style.cursor = 'grabbing';
-            activeBox.style.transition = 'none';
-          }
-
-          if (moved) {
-            const rect = activeBox.getBoundingClientRect();
-            const nextLeft = Math.max(
-              8,
-              Math.min(window.innerWidth - rect.width - 8, initialLeft + dx)
-            );
-            const nextTop = Math.max(
-              8,
-              Math.min(window.innerHeight - rect.height - 8, initialTop + dy)
-            );
-            activeBox.style.inset = `${Math.round(nextTop)}px auto auto ${Math.round(nextLeft)}px`;
-          }
-        },
-        { signal, passive: true }
-      );
-
-      const finishPointer = (ev: PointerEvent) => {
-        if (!dragging) return;
-        const wasMoved = moved;
-        resetDragState();
-
-        if (!wasMoved) {
-          onClickWithoutDrag?.(ev);
-          return;
-        }
-
-        if (activeBox) {
-          const rect = activeBox.getBoundingClientRect();
-          const centerX = rect.left + rect.width / 2;
-          const side: SnapSide = centerX < window.innerWidth / 2 ? 'left' : 'right';
-          const yRatio = Number(
-            Math.max(0.02, Math.min(0.92, rect.top / Math.max(1, window.innerHeight))).toFixed(4)
-          );
-
-          siteStore.set({ side, yRatio, margin: 20 });
-          syncTargets();
-        }
-      };
-
-      window.addEventListener('pointerup', finishPointer, { signal });
-      window.addEventListener('pointercancel', finishPointer, { signal });
     },
   };
 }

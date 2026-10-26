@@ -10,6 +10,7 @@ const fragmentEvents = new WeakMap<DocumentFragment, PendingEventBinding[]>();
 const SLOT_PREFIX = '__s_slot_';
 const SLOT_SUFFIX = '__';
 const EXACT_SLOT_RE = /^__s_slot_(\d+)__$/;
+const GLOBAL_SLOT_RE = /__s_slot_(\d+)__/g;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const SVG_TAGS = new Set([
@@ -44,6 +45,16 @@ function getTrustedPolicy() {
   return trustedPolicy;
 }
 
+function decodeHtmlEntities(str: string): string {
+  if (!str.includes('&')) return str;
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 function parseHtmlWithoutInnerHTML(rawHtml: string, root: DocumentFragment): void {
   const stack: Node[] = [root];
   let inSvg = 0;
@@ -61,7 +72,12 @@ function parseHtmlWithoutInnerHTML(rawHtml: string, root: DocumentFragment): voi
     } else if (closeTag !== undefined) {
       const lower = closeTag.toLowerCase();
       if (lower === 'svg' && inSvg > 0) inSvg--;
-      if (stack.length > 1) stack.pop();
+      if (stack.length > 1) {
+        const topNode = stack[stack.length - 1];
+        if (topNode instanceof Element && topNode.tagName.toLowerCase() === lower) {
+          stack.pop();
+        }
+      }
     } else if (openTag !== undefined) {
       const lower = openTag.toLowerCase();
       if (lower === 'svg') inSvg++;
@@ -76,8 +92,9 @@ function parseHtmlWithoutInnerHTML(rawHtml: string, root: DocumentFragment): voi
       if (attrStr) {
         for (const attrMatch of attrStr.matchAll(attrRe)) {
           const attrName = attrMatch[1];
-          if (!attrName) continue;
-          const attrVal = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? '';
+          // 安全红线：严禁通过模板属性注入原生 on* 内联事件处理器
+          if (!attrName || attrName.toLowerCase().startsWith('on')) continue;
+          const attrVal = decodeHtmlEntities(attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? '');
           el.setAttribute(attrName, attrVal);
         }
       }
@@ -89,7 +106,7 @@ function parseHtmlWithoutInnerHTML(rawHtml: string, root: DocumentFragment): voi
         inSvg--;
       }
     } else if (textNode !== undefined) {
-      parent.appendChild(document.createTextNode(textNode));
+      parent.appendChild(document.createTextNode(decodeHtmlEntities(textNode)));
     }
   }
 }
@@ -149,7 +166,7 @@ function valueToNode(val: unknown, collectedEvents: PendingEventBinding[]): Node
     return val;
   }
   if (val instanceof Node) {
-    return val;
+    return val.parentNode ? val.cloneNode(true) : val;
   }
   if (Array.isArray(val)) {
     const subFrag = document.createDocumentFragment();
@@ -194,13 +211,14 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): Docum
   for (const el of elements) {
     const attrs = Array.from(el.attributes);
     for (const attr of attrs) {
-      const match = attr.value.match(EXACT_SLOT_RE);
-      if (!match) continue;
+      // ! 这一行的作用是“属性值里不含占位符就跳过”。问题是用户模板字面量里如果恰好写了 __s_slot_0__ 这种字符串，会被误当成插值占位符。
+      // ! 真要改，只能把 includes 换成 SLOT_ANY_RE.test(attr.value)，但收益为零，不建议动。
+      if (!attr.value.includes(SLOT_PREFIX)) continue;
 
-      const idx = Number(match[1]);
-      const val = values[idx];
-
-      if (attr.name.startsWith('@')) {
+      const exactMatch = attr.value.match(EXACT_SLOT_RE);
+      if (attr.name.startsWith('@') && exactMatch) {
+        const idx = Number(exactMatch[1]);
+        const val = values[idx];
         const eventType = attr.name.slice(1);
         el.removeAttribute(attr.name);
         if (typeof val === 'function') {
@@ -210,11 +228,14 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): Docum
             listener: val as EventListener,
           });
         }
-      } else if (attr.name.startsWith('?')) {
+      } else if (attr.name.startsWith('?') && exactMatch) {
+        const idx = Number(exactMatch[1]);
         const boolAttr = attr.name.slice(1);
         el.removeAttribute(attr.name);
-        el.toggleAttribute(boolAttr, Boolean(val));
-      } else {
+        el.toggleAttribute(boolAttr, Boolean(values[idx]));
+      } else if (exactMatch) {
+        const idx = Number(exactMatch[1]);
+        const val = values[idx];
         if (typeof val === 'boolean') {
           el.toggleAttribute(attr.name, val);
         } else if (val === null || val === undefined) {
@@ -222,6 +243,13 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): Docum
         } else {
           el.setAttribute(attr.name, String(val));
         }
+      } else {
+        // 支持 class="foo ${bar}" 形式的多段属性拼接插值
+        const interpolated = attr.value.replace(GLOBAL_SLOT_RE, (_m, iStr) => {
+          const v = values[Number(iStr)];
+          return v === null || v === undefined ? '' : String(v);
+        });
+        el.setAttribute(attr.name, interpolated);
       }
     }
   }

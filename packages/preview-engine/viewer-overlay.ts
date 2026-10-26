@@ -46,6 +46,9 @@ export class LensViewer extends BaseComponent {
   #filenameTemplate = '{site}-{name}-{w}x{h}';
   #naturalW = 0;
   #naturalH = 0;
+  // # 修复 #probeFileSize 竞态与 #showStatus 定时器清理
+  #probeAbort: AbortController | null = null;
+  #statusTimer: ReturnType<typeof setTimeout> | null = null;
 
   protected readonly stylesheet = css`
     :host {
@@ -193,14 +196,15 @@ export class LensViewer extends BaseComponent {
 
   #showStatus(msg: string): void {
     const dimEl = this.$<HTMLElement>('#media-dim');
-    if (dimEl) {
-      dimEl.textContent = msg;
-      setTimeout(() => {
-        if (this.#naturalW > 0) {
-          dimEl.textContent = `${this.#naturalW} × ${this.#naturalH} px`;
-        }
-      }, 1800);
-    }
+    if (!dimEl) return;
+    if (this.#statusTimer !== null) clearTimeout(this.#statusTimer);
+    dimEl.textContent = msg;
+    this.#statusTimer = setTimeout(() => {
+      this.#statusTimer = null;
+      if (this.#naturalW > 0) {
+        dimEl.textContent = `${this.#naturalW} × ${this.#naturalH} px`;
+      }
+    }, 1800);
   }
 
   #loadCurrentIndex(): void {
@@ -228,6 +232,11 @@ export class LensViewer extends BaseComponent {
   }
 
   async #probeFileSize(url: string): Promise<void> {
+    this.#probeAbort?.abort();
+    const controller = new AbortController();
+    this.#probeAbort = controller;
+    const { signal } = controller;
+
     const sizeEl = this.$<HTMLElement>('#media-size');
     if (!sizeEl) return;
     sizeEl.textContent = '计算大小...';
@@ -239,7 +248,8 @@ export class LensViewer extends BaseComponent {
     };
 
     try {
-      const res = await fetch(url, { method: 'HEAD' });
+      const res = await fetch(url, { method: 'HEAD', signal });
+      if (signal.aborted) return;
       const len = Number(res.headers.get('content-length') ?? 0);
       if (len > 0) {
         sizeEl.textContent = formatBytes(len);
@@ -247,12 +257,19 @@ export class LensViewer extends BaseComponent {
       }
     } catch {}
 
+    if (signal.aborted) return;
+
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
+      if (signal.aborted) return;
       const blob = await res.blob();
-      sizeEl.textContent = formatBytes(blob.size);
+      if (!signal.aborted) {
+        sizeEl.textContent = formatBytes(blob.size);
+      }
     } catch {
-      sizeEl.textContent = '未知大小';
+      if (!signal.aborted) {
+        sizeEl.textContent = '未知大小';
+      }
     }
   }
 
@@ -263,7 +280,9 @@ export class LensViewer extends BaseComponent {
     try {
       const res = await fetch(url);
       const blob = await res.blob();
-      const ext = (blob.type.split('/')[1] ?? 'jpg').replace('jpeg', 'jpg');
+      // const ext = (blob.type.split('/')[1] ?? 'jpg').replace('jpeg', 'jpg');
+      // # DeepSeek 修改
+      const ext = (blob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
       const filename = formatFilename(
         this.#filenameTemplate,
         url,
@@ -361,6 +380,9 @@ export class LensViewer extends BaseComponent {
               const img = e.currentTarget as HTMLImageElement;
               if (this.#currentMedia && img.src !== this.#currentMedia.previewUrl) {
                 img.src = this.#currentMedia.previewUrl;
+              } else {
+                img.style.opacity = '1';
+                this.#showStatus('图片加载失败');
               }
             }}
         />
@@ -526,6 +548,8 @@ export class LensViewer extends BaseComponent {
   }
 
   protected override onDestroy(): void {
+    // # DeepSeek 修改
+    this.#probeAbort?.abort();
     this.#gesture?.[Symbol.dispose]();
     this.#gesture = null;
   }

@@ -53,6 +53,7 @@ function upgradeSocialMediaUrl(
 export const universalExtractor: LensExtractor = {
   id: 'universal-hd',
   name: '全网高清图与社媒头像提取器',
+  isFallback: true,
   match: () => true,
   selector: 'img',
   resolve(el) {
