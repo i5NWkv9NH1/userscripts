@@ -344,19 +344,25 @@ export class LensViewer extends BaseComponent {
         </button>
 
         <img
-          id="main-img"
-          class="canvas-img"
-          alt="Sora Lens Preview"
-          @load=${(e: Event) => {
-            const img = e.currentTarget as HTMLImageElement;
-            img.style.opacity = '1';
-            this.#naturalW = img.naturalWidth;
-            this.#naturalH = img.naturalHeight;
-            const dimEl = this.$<HTMLElement>('#media-dim');
-            if (dimEl) {
-              dimEl.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
-            }
-          }}
+            id='main-img'
+            class='canvas-img'
+            alt='Sora Lens Preview'
+            @load=${(e: Event) => {
+              const img = e.currentTarget as HTMLImageElement;
+              img.style.opacity = '1';
+              this.#naturalW = img.naturalWidth;
+              this.#naturalH = img.naturalHeight;
+              const dimEl = this.$<HTMLElement>('#media-dim');
+              if (dimEl) {
+                dimEl.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
+              }
+            }}
+            @error=${(e: Event) => {
+              const img = e.currentTarget as HTMLImageElement;
+              if (this.#currentMedia && img.src !== this.#currentMedia.previewUrl) {
+                img.src = this.#currentMedia.previewUrl;
+              }
+            }}
         />
 
         <button

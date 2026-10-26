@@ -30,5 +30,5 @@ export {
   customElement,
   defineComponent,
 } from './dom/base-component.ts';
-export { bindFragmentEvents, html } from './dom/template.ts';
+export { bindFragmentEvents, html, setTemplateHTML } from './dom/template.ts';
 export { createLogger, SoraLogger } from './logger/index.ts';

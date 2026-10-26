@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "clean-code": {
+      "source": "Mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "clean-code/SKILL.md",
+      "computedHash": "96ff8d9ddf229b4389ab48cf66011ee2883ec3cc98f772cdb16adac509cce918"
+    },
+    "git-workflow": {
+      "source": "Mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "git-workflow/SKILL.md",
+      "computedHash": "05ede784c12d5efa1f01d6f667f26a7674b7beea55767ed5ad18f3ad707d11bf"
+    },
+    "readme-best-practices": {
+      "source": "Mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "readme-best-practices/SKILL.md",
+      "computedHash": "13a3f810b41e04726e642ac0991e6b52af4290a24850068ca1e87dfc9691644d"
+    },
+    "security-best-practices": {
+      "source": "Mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "security-best-practices/SKILL.md",
+      "computedHash": "fb0f5125e64cd4888426a5612c7a724a1982e945da21d300b5acd948c93dc5bb"
+    },
+    "testing": {
+      "source": "Mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "testing/SKILL.md",
+      "computedHash": "0aec5aa4ebbb3bf9f511ca1f58796dd759d2a85036b235ddc4e2967e5daaba4d"
+    }
+  }
+}

@@ -108,12 +108,90 @@ export function createDevBridgeScript(meta: UserScriptMeta, site: string, port: 
 `;
 }
 
-function minifyCssString(raw: string): string {
+export function minifyCssString(raw: string): string {
   return raw
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\s+/g, ' ')
     .replace(/\s*([{}:;,>+~])\s*/g, '$1')
     .trim();
+}
+
+export function minifyHtmlChunk(chunk: string): string {
+  return chunk
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/>\s+</g, '><')
+    .replace(/\s+>/g, '>');
+}
+
+export function minifyTaggedTemplatesInSource(source: string): string {
+  const tagRe = /\b(html|css)`/g;
+  let result = '';
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+
+  // biome-ignore lint/suspicious/noAssignInExpressions: exec 循环惯用写法，赋值与判空合并
+  while ((match = tagRe.exec(source)) !== null) {
+    const tag = match[1]!;
+    const startBacktick = match.index + tag.length;
+    result += source.slice(lastIdx, startBacktick + 1);
+
+    let i = startBacktick + 1;
+    let chunkStart = i;
+
+    while (i < source.length) {
+      const ch = source[i];
+      if (ch === '\\') {
+        i += 2;
+        continue;
+      }
+      if (ch === '$' && source[i + 1] === '{') {
+        const rawChunk = source.slice(chunkStart, i);
+        result += tag === 'css' ? minifyCssString(rawChunk) : minifyHtmlChunk(rawChunk);
+        result += '${';
+        i += 2;
+
+        let braceDepth = 1;
+        const exprStart = i;
+        while (i < source.length && braceDepth > 0) {
+          const c = source[i];
+          if (c === '\\') {
+            i += 2;
+            continue;
+          }
+          if (c === '{') braceDepth++;
+          else if (c === '}') braceDepth--;
+          else if (c === "'" || c === '"' || c === '`') {
+            const quote = c;
+            i++;
+            while (i < source.length && source[i] !== quote) {
+              if (source[i] === '\\') i++;
+              i++;
+            }
+          }
+          i++;
+        }
+        const innerExpr = source.slice(exprStart, i - 1);
+        result += `${minifyTaggedTemplatesInSource(innerExpr)}}`;
+        chunkStart = i;
+        continue;
+      }
+      if (ch === '`') {
+        const rawChunk = source.slice(chunkStart, i);
+        result += tag === 'css' ? minifyCssString(rawChunk) : minifyHtmlChunk(rawChunk);
+        result += '`';
+        i++;
+        break;
+      }
+      i++;
+    }
+
+    lastIdx = i;
+    tagRe.lastIndex = i;
+  }
+
+  result += source.slice(lastIdx);
+  return result;
 }
 
 export const inlineTemplateMinifierPlugin: BunPlugin = {
@@ -129,23 +207,11 @@ export const inlineTemplateMinifierPlugin: BunPlugin = {
     });
 
     build.onLoad({ filter: /\.ts$/ }, async (args) => {
-      let source = await Bun.file(args.path).text();
-      source = source.replace(
-        /\b(html|css)`([\s\S]*?)`/g,
-        (_full, tag: string, content: string) => {
-          let minified = content;
-          if (tag === 'css') {
-            minified = minifyCssString(content);
-          } else if (tag === 'html') {
-            minified = content
-              .replace(/<!--[\s\S]*?-->/g, '')
-              .replace(/>\s+</g, '><')
-              .trim();
-          }
-          return `${tag}\`${minified}\``;
-        }
-      );
-      return { contents: source, loader: 'ts' };
+      const source = await Bun.file(args.path).text();
+      return {
+        contents: minifyTaggedTemplatesInSource(source),
+        loader: 'ts',
+      };
     });
   },
 };

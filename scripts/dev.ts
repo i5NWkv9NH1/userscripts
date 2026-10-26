@@ -1,6 +1,7 @@
 // scripts/dev.ts
 
 import { watch } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import {
@@ -183,6 +184,10 @@ Bun.serve<{ site: string }>({
   },
 });
 
-console.info(`[sora-dev] JIT 开发网关已启动！`);
-console.info(`[sora-dev] 沙盒热更新桥接安装地址：http://localhost:${PORT}/playground.dev.user.js`);
-console.info(`[sora-dev] 全局看图桥接安装地址：http://localhost:${PORT}/sora-lens.dev.user.js`);
+const siteEntries = await readdir(SITES_DIR, { withFileTypes: true });
+const siteNames = siteEntries.filter((e) => e.isDirectory()).map((e) => e.name);
+
+console.info(`[sora-dev] JIT 开发网关已启动！（按住 Alt/Cmd + 鼠标左键即可直接安装）`);
+for (const site of siteNames) {
+  console.info(`  -> [${site}] http://localhost:${PORT}/${site}.dev.user.js`);
+}

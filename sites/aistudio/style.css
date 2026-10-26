@@ -1,0 +1,86 @@
+/* sites/aistudio/style.css */
+:host {
+  display: contents;
+}
+
+.studio-orb {
+  position: fixed;
+  inset: auto 20px 20px auto;
+  margin: 0;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--s-border);
+  background: var(--s-bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  color: var(--s-text);
+  box-shadow: var(--s-shadow);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  transition:
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    inset 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.15s;
+
+  &:hover {
+    transform: scale(1.05);
+    background: var(--s-surface-hover);
+  }
+}
+
+.stats-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--s-border);
+  background: var(--s-surface);
+}
+
+.num-input,
+.fmt-select {
+  width: 64px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--s-border);
+  background: var(--s-surface);
+  color: var(--s-text);
+  font-size: 12px;
+  text-align: center;
+  outline: none;
+
+  &:focus {
+    border-color: var(--s-accent);
+  }
+}
+
+.fmt-select {
+  width: 125px;
+}
+
+.pos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.pos-btn {
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--s-border);
+  background: var(--s-surface);
+  color: var(--s-text);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--s-surface-hover);
+  }
+}
+
+.section-divider {
+  height: 1px;
+  background: var(--s-border);
+  margin: 2px 0;
+}

@@ -41,15 +41,17 @@ async function buildAll() {
       process.exit(1);
     }
 
-    const jsContent = (await result.outputs[0]!.text()).trim();
-    const outPath = join(DIST_DIR, `${site}.user.js`);
+    // const jsContent = (await result.outputs[0]!.text()).trim();
+    const rawJs = (await result.outputs[0]!.text()).trim();
+    // 经过 Bun.build 压缩后，所有剩余的真换行均来自反引号模板内部，直接全局转义为 \n 即可实现 100% 纯单行
+    const jsContent = rawJs.replace(/\r?\n/g, '\\n');
+    const outFileName = `@sora-${site}.userscript.js`;
+    const outPath = join(DIST_DIR, outFileName);
     await Bun.write(outPath, `${banner}\n${jsContent}\n`);
 
     const sizeKB = (Buffer.byteLength(jsContent, 'utf8') / 1024).toFixed(2);
     const cost = (performance.now() - siteStart).toFixed(2);
-    console.info(
-      `[Build] 极致压缩完成：dist/${site}.user.js （体积 ${sizeKB} KB，耗时 ${cost}ms）`
-    );
+    console.info(`[Build] 极致压缩完成：dist/${outFileName} （体积 ${sizeKB} KB，耗时 ${cost}ms）`);
   }
 
   const totalCost = (performance.now() - totalStart).toFixed(2);

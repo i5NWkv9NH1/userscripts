@@ -1,4 +1,6 @@
 // packages/ui/icons/index.ts
+import { setTemplateHTML } from '@core';
+
 const iconTemplateCache = new Map<string, HTMLTemplateElement>();
 
 export const Icons = {
@@ -26,7 +28,7 @@ export function svgIcon(svgString: string): DocumentFragment {
   let tpl = iconTemplateCache.get(svgString);
   if (!tpl) {
     tpl = document.createElement('template');
-    tpl.innerHTML = svgString;
+    setTemplateHTML(tpl, svgString);
     iconTemplateCache.set(svgString, tpl);
   }
   return tpl.content.cloneNode(true) as DocumentFragment;

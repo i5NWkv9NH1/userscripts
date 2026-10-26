@@ -11,6 +11,103 @@ const SLOT_PREFIX = '__s_slot_';
 const SLOT_SUFFIX = '__';
 const EXACT_SLOT_RE = /^__s_slot_(\d+)__$/;
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_TAGS = new Set([
+  'svg',
+  'path',
+  'circle',
+  'rect',
+  'line',
+  'polyline',
+  'polygon',
+  'g',
+  'defs',
+  'animate',
+  'animatetransform',
+]);
+const VOID_TAGS = new Set(['input', 'img', 'br', 'hr', 'meta', 'link', 'source']);
+
+let trustedPolicy: { createHTML: (s: string) => unknown } | null | undefined;
+
+function getTrustedPolicy() {
+  if (trustedPolicy !== undefined) return trustedPolicy;
+  trustedPolicy = null;
+  const tt = (globalThis as Record<string, any>).trustedTypes;
+  if (tt && typeof tt.createPolicy === 'function') {
+    for (const name of ['sora#html', 'default', 'dompurify']) {
+      try {
+        trustedPolicy = tt.createPolicy(name, { createHTML: (s: string) => s });
+        break;
+      } catch {}
+    }
+  }
+  return trustedPolicy;
+}
+
+function parseHtmlWithoutInnerHTML(rawHtml: string, root: DocumentFragment): void {
+  const stack: Node[] = [root];
+  let inSvg = 0;
+
+  const tokenRe =
+    /<!--([\s\S]*?)-->|<\/([a-zA-Z0-9_-]+)\s*>|<([a-zA-Z0-9_-]+)([^>]*?)(\/?)>|([^<]+)/g;
+  const attrRe = /([a-zA-Z0-9_@?-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+
+  for (const match of rawHtml.matchAll(tokenRe)) {
+    const parent = stack[stack.length - 1] ?? root;
+    const [, commentText, closeTag, openTag, attrStr, selfClose, textNode] = match;
+
+    if (commentText !== undefined) {
+      parent.appendChild(document.createComment(commentText));
+    } else if (closeTag !== undefined) {
+      const lower = closeTag.toLowerCase();
+      if (lower === 'svg' && inSvg > 0) inSvg--;
+      if (stack.length > 1) stack.pop();
+    } else if (openTag !== undefined) {
+      const lower = openTag.toLowerCase();
+      if (lower === 'svg') inSvg++;
+      const isSvg = inSvg > 0 || SVG_TAGS.has(lower);
+      const el = isSvg
+        ? document.createElementNS(
+            SVG_NS,
+            lower === 'animatetransform' ? 'animateTransform' : lower
+          )
+        : document.createElement(lower);
+
+      if (attrStr) {
+        for (const attrMatch of attrStr.matchAll(attrRe)) {
+          const attrName = attrMatch[1];
+          if (!attrName) continue;
+          const attrVal = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? '';
+          el.setAttribute(attrName, attrVal);
+        }
+      }
+
+      parent.appendChild(el);
+      if (!selfClose && !VOID_TAGS.has(lower)) {
+        stack.push(el);
+      } else if (lower === 'svg' && inSvg > 0) {
+        inSvg--;
+      }
+    } else if (textNode !== undefined) {
+      parent.appendChild(document.createTextNode(textNode));
+    }
+  }
+}
+
+export function setTemplateHTML(tpl: HTMLTemplateElement, rawHtml: string): void {
+  try {
+    const policy = getTrustedPolicy();
+    if (policy) {
+      tpl.innerHTML = policy.createHTML(rawHtml) as unknown as string;
+      return;
+    }
+    tpl.innerHTML = rawHtml;
+  } catch {
+    tpl.content.replaceChildren();
+    parseHtmlWithoutInnerHTML(rawHtml, tpl.content);
+  }
+}
+
 function buildTemplateElement(strings: TemplateStringsArray): HTMLTemplateElement {
   let acc = '';
   for (let i = 0; i < strings.length; i++) {
@@ -35,7 +132,7 @@ function buildTemplateElement(strings: TemplateStringsArray): HTMLTemplateElemen
   }
 
   const tpl = document.createElement('template');
-  tpl.innerHTML = acc;
+  setTemplateHTML(tpl, acc);
   return tpl;
 }
 

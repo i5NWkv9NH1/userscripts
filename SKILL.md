@@ -20,3 +20,8 @@
 | **DOM 观察**   | 在 `MutationObserver` 回调内同步读写布局   | 使用 `useObserver`（内部通过 `requestAnimationFrame` 节流合并）    |
 | **二进制资源** | `URL.createObjectURL` 后不释放             | 必须在加载完成或组件销毁时调用 `URL.revokeObjectURL`               |
 | **日志输出**   | 裸写 `console.log`（易被宿主网页劫持屏蔽） | 使用 `@core` 导出的 `createLogger('模块名')`                       |
+
+## 三、 组合式积木 (Composables) 的 UI 显性暴露规范
+
+- 凡是在站点模块中调用了 `useShortcut`（快捷键管理）或 `useSnapPosition`（自由拖拽与边缘磁吸定位）等**用户可感知的交互型 Composable，必须在该模块的 UI 面板中显式渲染对应的快捷键修改按钮、预设方位按钮与拖拽操作说明**，绝不能只在后台静默注册而不给用户可视化的控制入口。
+- 面板文案一律采用**通俗直白的大白话**与清晰的副标题说明，严禁使用晦涩难懂的中二、极客造词。

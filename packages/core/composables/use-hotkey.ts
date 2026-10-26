@@ -1,5 +1,4 @@
-// biome-ignore lint/suspicious/noConfusingVoidType: void 作为函数返回类型表示返回值可忽略，是标准写法
-export type HotkeyHandler = (ev: KeyboardEvent) => void | boolean;
+export type HotkeyHandler = (ev: KeyboardEvent) => undefined | boolean;
 export type HotkeyMap = Record<string, HotkeyHandler>;
 
 export interface UseHotkeyOptions {
@@ -8,6 +7,8 @@ export interface UseHotkeyOptions {
   readonly preventDefault?: boolean;
   readonly capture?: boolean;
 }
+
+const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
 
 export function isEditableElement(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -19,9 +20,11 @@ export function isEditableElement(el: EventTarget | null): boolean {
 export function formatEventCombo(ev: KeyboardEvent): {
   byCode: string;
   byKey: string;
+  hasModifier: boolean;
 } {
   const mods: string[] = [];
-  if (ev.ctrlKey || ev.metaKey) mods.push('Mod');
+  if (ev.metaKey) mods.push('Meta');
+  if (ev.ctrlKey) mods.push('Ctrl');
   if (ev.altKey) mods.push('Alt');
   if (ev.shiftKey) mods.push('Shift');
 
@@ -29,13 +32,15 @@ export function formatEventCombo(ev: KeyboardEvent): {
   return {
     byCode: `${prefix}${ev.code}`,
     byKey: `${prefix}${ev.key}`,
+    hasModifier: mods.length > 0,
   };
 }
 
 export function formatComboLabel(combo: string): string {
   return combo
-    .replace('Mod+', '⌘/Ctrl + ')
-    .replace('Alt+', 'Alt + ')
+    .replace('Meta+', isMac ? 'Cmd(⌘) + ' : 'Win + ')
+    .replace('Ctrl+', isMac ? 'Ctrl(⌃) + ' : 'Ctrl + ')
+    .replace('Alt+', isMac ? 'Opt(⌥) + ' : 'Alt + ')
     .replace('Shift+', 'Shift + ')
     .replace('Key', '')
     .replace('Digit', '')
