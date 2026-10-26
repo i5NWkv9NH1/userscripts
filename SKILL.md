@@ -2,9 +2,9 @@
 
 ## 一、 运行底座与目标环境
 
-- **运行时与打包器**：纯 `Bun 1.4.4+`（严禁出现 `node`、`npm`、`npx`、`vite`）。
-- **语言标准**：`TypeScript 7.0+`（严禁在 `tsconfig.json` 中使用已移除的 `baseUrl`）。
-- **目标浏览器**：2026+ 常青浏览器（macOS Orion / WebKit 625.1.8+、Chromium 156+、Firefox 158+）。
+- **运行时与打包器**：纯 `Bun 1.4.4+`。
+- **语言标准**：`TypeScript 7.0+`。
+- **目标浏览器**：2026+ 浏览器（macOS Orion / WebKit 625.1.8+、Chromium 156+、Firefox 158+）。
 
 ## 二、 API 红绿灯对照表
 

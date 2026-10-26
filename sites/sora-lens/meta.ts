@@ -1,11 +1,11 @@
 // sites/sora-lens/meta.ts
-import type { UserScriptMeta } from '../../scripts/meta.ts';
+import type { UserScriptMeta } from "@scripts/meta";
 
 export const meta: UserScriptMeta = {
-  name: '@sora/sora-lens — 声明式看图引擎',
+  name: '@sora/sora-lens — 看图脚本',
   namespace: '@sora/userscripts',
   version: '1.0.0',
-  description: '基于 yt-dlp 声明式提取器模型、Top Layer GPU 灯箱与自适应系统主题的现代看图脚本',
+  description: '基于声明式提取器、灯箱的看图脚本，可用于替代 PreviewCE+',
   author: 'sora',
   match: ['*://*/*'],
   grant: [

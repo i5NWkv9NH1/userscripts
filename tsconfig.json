@@ -30,8 +30,9 @@
       "@ui": ["./packages/ui/index.ts"],
       "@ui/*": ["./packages/ui/*"],
       "@preview": ["./packages/preview-engine/index.ts"],
-      "@preview/*": ["./packages/preview-engine/*"]
-    }
+      "@preview/*": ["./packages/preview-engine/*"],
+      "@scripts/*": ["./scripts/*"],
+    },
   },
-  "include": ["packages/**/*", "sites/**/*", "scripts/**/*"]
+  "include": ["packages/**/*", "sites/**/*", "scripts/**/*"],
 }
