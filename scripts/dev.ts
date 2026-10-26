@@ -1,9 +1,9 @@
 // scripts/dev.ts
 
+import type { ServerWebSocket } from 'bun';
 import { watch } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { ServerWebSocket } from 'bun';
 import {
   createDevBridgeScript,
   inlineTemplateMinifierPlugin,
@@ -63,7 +63,7 @@ async function compileSiteInMemory(site: string): Promise<string> {
   }
 
   const meta = await loadSiteMeta(site);
-  const header = serializeMeta(meta);
+  const header = serializeMeta(meta, join(SITES_DIR, site));
 
   const result = await Bun.build({
     entrypoints: [entryPath],

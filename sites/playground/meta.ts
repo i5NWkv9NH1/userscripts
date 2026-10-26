@@ -1,4 +1,4 @@
-import type { UserScriptMeta } from "@scripts/meta";
+import type { UserScriptMeta } from '@scripts/meta';
 
 export const meta: UserScriptMeta = {
   name: '@sora/playground — 组件沙盒',

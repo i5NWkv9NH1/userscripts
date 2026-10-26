@@ -22,7 +22,7 @@ async function buildAll() {
 
     const metaModule = await import(metaPath);
     const meta: UserScriptMeta = metaModule.meta;
-    const banner = serializeMeta(meta);
+    const banner = serializeMeta(meta, join(SITES_DIR, site));
 
     const result = await Bun.build({
       entrypoints: [entryPath],
@@ -42,9 +42,13 @@ async function buildAll() {
     }
 
     // const jsContent = (await result.outputs[0]!.text()).trim();
-    const rawJs = (await result.outputs[0]!.text()).trim();
+    // const rawJs = (await result.outputs[0]!.text()).trim();
     // 经过 Bun.build 压缩后，所有剩余的真换行均来自反引号模板内部，直接全局转义为 \n 即可实现 100% 纯单行
-    const jsContent = rawJs.replace(/\r?\n/g, '\\n');
+    // # 为生产产物包裹 customElements 环境自适应提权壳
+    const rawJs = (await result.outputs[0]!.text()).trim();
+    const flatJs = rawJs.replace(/\r?\n/g, '\\n');
+    // # 当处于 content 隔离沙盒（customElements === null）时，自动通过 GM_addElement 穿透 CSP 挂载至主页面上下文执行
+    const jsContent = `(()=>{const b=()=>{${flatJs}};if(typeof customElements!=="undefined"&&customElements!==null){b()}else if(typeof GM_addElement==="function"){GM_addElement(document.head||document.documentElement,"script",{textContent:"("+b.toString()+")()"})}})();`;
     const outFileName = `@sora-${site}.userscript.js`;
     const outPath = join(DIST_DIR, outFileName);
     await Bun.write(outPath, `${banner}\n${jsContent}\n`);

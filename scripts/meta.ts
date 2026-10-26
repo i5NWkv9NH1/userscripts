@@ -1,5 +1,7 @@
 // scripts/meta.ts
 import type { BunPlugin } from 'bun';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export interface UserScriptMeta {
   name: string;
@@ -7,6 +9,7 @@ export interface UserScriptMeta {
   version: string;
   description: string;
   author?: string;
+  icon?: string;
   match: string[];
   grant: string[];
   'run-at'?: 'document-start' | 'document-body' | 'document-end' | 'document-idle';
@@ -17,7 +20,24 @@ export interface UserScriptMeta {
   noframes?: boolean;
 }
 
-export function serializeMeta(meta: UserScriptMeta): string {
+export function resolveSiteIcon(meta: UserScriptMeta, siteDir?: string): string | undefined {
+  if (meta.icon) return meta.icon;
+  if (!siteDir) return undefined;
+
+  const svgPath = join(siteDir, 'icon.svg');
+  if (existsSync(svgPath)) {
+    const rawSvg = readFileSync(svgPath, 'utf8')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\s+/g, ' ')
+      .replace(/>\s+</g, '><')
+      .trim();
+    const b64 = Buffer.from(rawSvg, 'utf8').toString('base64');
+    return `data:image/svg+xml;base64,${b64}`;
+  }
+  return undefined;
+}
+
+export function serializeMeta(meta: UserScriptMeta, siteDir?: string): string {
   const lines: string[] = ['// ==UserScript=='];
   const pushLine = (key: string, val: string) => {
     lines.push(`// @${key.padEnd(14, ' ')} ${val}`);
@@ -28,9 +48,14 @@ export function serializeMeta(meta: UserScriptMeta): string {
   pushLine('version', meta.version);
   pushLine('description', meta.description);
   pushLine('author', meta.author ?? 'sora');
+  const iconUrl = resolveSiteIcon(meta, siteDir);
+  if (iconUrl) pushLine('icon', iconUrl);
 
   for (const m of meta.match) pushLine('match', m);
-  for (const g of meta.grant) pushLine('grant', g);
+  // for (const g of meta.grant) pushLine('grant', g);
+  // ! 确保所有打包产物自动包含 @grant GM_addElement
+  const grants = Array.from(new Set([...meta.grant, 'GM_addElement']));
+  for (const g of grants) pushLine('grant', g);
   for (const c of meta.connect ?? []) pushLine('connect', c);
   for (const r of meta.require ?? []) pushLine('require', r);
   for (const res of meta.resource ?? []) pushLine('resource', res);
@@ -211,6 +236,18 @@ export const inlineTemplateMinifierPlugin: BunPlugin = {
       return {
         contents: minifyTaggedTemplatesInSource(source),
         loader: 'ts',
+      };
+    });
+
+    build.onLoad({ filter: /\.svg$/ }, async (args) => {
+      const rawSvg = (await Bun.file(args.path).text())
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/\s+/g, ' ')
+        .replace(/>\s+</g, '><')
+        .trim();
+      return {
+        contents: `export default ${JSON.stringify(rawSvg)};`,
+        loader: 'js',
       };
     });
   },
