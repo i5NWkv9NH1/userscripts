@@ -12,15 +12,15 @@ export function css(strings: TemplateStringsArray, ...values: unknown[]): string
 const ATOMIC_THEME_CSS = css`
   :host {
     color-scheme: light dark;
-    --s-bg: light-dark(rgba(255, 255, 255, 0.86), rgba(20, 20, 26, 0.86));
-    --s-surface: light-dark(rgba(244, 244, 248, 0.9), rgba(34, 34, 44, 0.85));
+    --s-bg: light-dark(rgba(255, 255, 255, 0.88), rgba(20, 20, 26, 0.88));
+    --s-surface: light-dark(rgba(244, 244, 248, 0.92), rgba(34, 34, 44, 0.88));
     --s-surface-hover: light-dark(
-      rgba(228, 228, 235, 0.95),
-      rgba(48, 48, 62, 0.95)
+      rgba(228, 228, 235, 0.96),
+      rgba(48, 48, 62, 0.96)
     );
     --s-text: light-dark(#18181b, #f4f4f6);
-    --s-text-muted: light-dark(#71717a, #a1a1aa);
-    --s-border: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.12));
+    --s-text-muted: light-dark(#52525b, #a1a1aa);
+    --s-border: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.14));
     --s-accent: light-dark(#4f46e5, #6366f1);
     --s-accent-hover: light-dark(#4338ca, #818cf8);
     --s-danger: light-dark(#dc2626, #f87171);
@@ -43,6 +43,35 @@ const ATOMIC_THEME_CSS = css`
   *::before,
   *::after {
     box-sizing: border-box;
+  }
+
+  /* * 表单控件不继承外部字体，显式继承以符合 Web Components 规范 */
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--s-accent);
+    outline-offset: 2px;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
   .flex {
@@ -102,7 +131,12 @@ const ATOMIC_THEME_CSS = css`
     color: var(--s-text-muted);
   }
   .select-none {
+    -webkit-user-select: none;
     user-select: none;
+  }
+
+  [hidden] {
+    display: none !important;
   }
 
   .s-btn {
@@ -121,14 +155,22 @@ const ATOMIC_THEME_CSS = css`
     transition:
       background 0.15s,
       border-color 0.15s,
-      transform 0.1s;
+      transform 0.1s,
+      opacity 0.15s;
 
-    &:hover {
+    &:hover:not(:disabled) {
       background: var(--s-surface-hover);
     }
 
-    &:active {
+    &:active:not(:disabled) {
       transform: scale(0.97);
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      filter: grayscale(0.35);
+      cursor: not-allowed;
+      pointer-events: none;
     }
   }
 
@@ -166,10 +208,33 @@ const ATOMIC_THEME_CSS = css`
 
 let sharedAtomicSheet: CSSStyleSheet | null = null;
 
+export function createAdoptedStyleSheet(cssText: string): CSSStyleSheet {
+  // * 在 Firefox/Zen 的 @inject-into content 沙盒下，优先用页面主域 CSSStyleSheet 构造函数，
+  // * 保证挂载到主域 ShadowRoot 的 adoptedStyleSheets 时不触发跨区权限错误。
+  const rawWin =
+    typeof window !== 'undefined'
+      ? (window as unknown as { wrappedJSObject?: { CSSStyleSheet?: typeof CSSStyleSheet } })
+          .wrappedJSObject
+      : undefined;
+  if (rawWin?.CSSStyleSheet) {
+    try {
+      const sheet = new rawWin.CSSStyleSheet();
+      sheet.replaceSync(cssText);
+      return sheet;
+    } catch {}
+  }
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(cssText);
+  return sheet;
+}
+
+export function getAtomicThemeCssText(): string {
+  return ATOMIC_THEME_CSS;
+}
+
 export function getAtomicThemeSheet(): CSSStyleSheet {
   if (!sharedAtomicSheet) {
-    sharedAtomicSheet = new CSSStyleSheet();
-    sharedAtomicSheet.replaceSync(ATOMIC_THEME_CSS);
+    sharedAtomicSheet = createAdoptedStyleSheet(ATOMIC_THEME_CSS);
   }
   return sharedAtomicSheet;
 }

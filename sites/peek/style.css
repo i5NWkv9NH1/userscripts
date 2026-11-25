@@ -1,0 +1,18 @@
+:host {
+  display: contents;
+}
+
+.form-select,
+.form-input {
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--s-border);
+  background: var(--s-surface);
+  color: var(--s-text);
+  font-size: 11px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--s-accent);
+  }
+}

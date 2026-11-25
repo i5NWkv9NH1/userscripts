@@ -13,7 +13,7 @@ export interface TrimmerStats {
   readonly currentLimit: number;
 }
 
-export class DomTrimmerEngine {
+export class DomTrimmer {
   #maxVisibleRounds = 35;
   #hiddenTurns: HTMLElement[] = [];
   #detachedRounds: HTMLElement[][] = [];
@@ -33,7 +33,7 @@ export class DomTrimmerEngine {
     return Array.from(document.querySelectorAll<HTMLElement>('ms-chat-turn'));
   }
 
-  // 将散装的 ms-chat-turn（提问图片、提问文字、AI思考、AI回答）按「完整问答回合」智能聚合
+  // * 把散开的提问和回答节点按「一问一答」合并成完整轮次
   getConversationRounds(): HTMLElement[][] {
     const turns = this.getTurns();
     const rounds: HTMLElement[][] = [];
@@ -45,7 +45,6 @@ export class DomTrimmerEngine {
         turn.querySelector('[data-turn-role="User"], .user, .user-prompt-container') !== null;
       const role: 'User' | 'Model' = isUser ? 'User' : 'Model';
 
-      // 当遇到新的 User 提问，且上一轮已经进入过 Model 回答阶段，则开启新的一轮问答
       if (role === 'User' && lastRole === 'Model' && currentRound.length > 0) {
         rounds.push(currentRound);
         currentRound = [turn];
@@ -187,7 +186,18 @@ export class DomTrimmerEngine {
       }
     }
 
-    this.optimize(cfg);
+    // * 仅更新可见状态与统计，不触发二次移除刚回填的历史轮次
+    const updatedRounds = this.getConversationRounds();
+    const hiddenCount = Math.max(0, updatedRounds.length - this.#maxVisibleRounds);
+    this.#hiddenTurns = [];
+    updatedRounds.forEach((r, idx) => {
+      const shouldHide = idx < hiddenCount;
+      for (const el of r) {
+        el.style.display = shouldHide ? 'none' : '';
+        if (shouldHide) this.#hiddenTurns.push(el);
+      }
+    });
+    this.#emitStats();
     return step;
   }
 
@@ -228,20 +238,49 @@ export class DomTrimmerEngine {
   }
 
   collapseAllCodeBlocks(): number {
+    return this.#toggleAllCodeBlocks('expand_less');
+  }
+
+  expandAllCodeBlocks(): number {
+    return this.#toggleAllCodeBlocks('expand_more');
+  }
+
+  // * 只处理当前仍在页面上显示（未隐藏）的对话代码块
+  #toggleAllCodeBlocks(targetIconText: 'expand_less' | 'expand_more'): number {
     const spans = document.querySelectorAll<HTMLElement>(
       'ms-code-block button[data-test-id="expand-icon-button"] span'
     );
-    let collapsed = 0;
+    let count = 0;
     for (const span of spans) {
-      if (span.textContent?.trim() === 'expand_less') {
-        const btn = span.closest<HTMLButtonElement>('button');
-        if (btn) {
-          btn.click();
-          collapsed++;
-        }
+      if (span.textContent?.trim() !== targetIconText) continue;
+      const turn = span.closest<HTMLElement>('ms-chat-turn');
+      if (turn && turn.style.display === 'none') continue;
+      const btn = span.closest<HTMLButtonElement>('button');
+      if (btn) {
+        btn.click();
+        count++;
       }
     }
-    return collapsed;
+    return count;
+  }
+
+  scrollToLatestTurn(): boolean {
+    const turns = this.getTurns();
+    const lastTurn = turns[turns.length - 1];
+    if (!lastTurn) return false;
+
+    let parent = lastTurn.parentElement;
+    while (parent && parent !== document.body) {
+      const overflowY = window.getComputedStyle(parent).overflowY;
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        parent.scrollTo({ top: parent.scrollHeight, behavior: 'smooth' });
+        return true;
+      }
+      parent = parent.parentElement;
+    }
+
+    lastTurn.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    return true;
   }
 
   resetSession(cfg: TrimmerConfig): void {

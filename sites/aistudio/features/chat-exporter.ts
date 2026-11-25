@@ -1,4 +1,13 @@
-import type { DomTrimmerEngine, TrimmerConfig } from './dom-trimmer.ts';
+import { resolveLocale } from '@core';
+import type { DomTrimmer, TrimmerConfig } from './dom-trimmer.ts';
+
+declare function GM_xmlhttpRequest(details: {
+  method: 'GET';
+  url: string;
+  responseType: 'blob';
+  onload?: (res: { status: number; response: unknown }) => void;
+  onerror?: () => void;
+}): void;
 
 export type ExportFormat = 'md' | 'json';
 
@@ -24,7 +33,8 @@ export interface SessionMetadata {
 
 interface ImageAttachment {
   readonly alt: string;
-  readonly dataUrl: string;
+  readonly src: string;
+  readonly dataUrl: string | null;
 }
 
 interface TurnSnapshot {
@@ -49,7 +59,7 @@ function stripEmojisSafe(text: string): string {
   });
 }
 
-function imageElementToDataUrl(img: HTMLImageElement): string | null {
+function tryCanvasToDataUrl(img: HTMLImageElement): string | null {
   const src = img.currentSrc || img.src;
   if (!src) return null;
   if (src.startsWith('data:')) return src;
@@ -73,6 +83,85 @@ function imageElementToDataUrl(img: HTMLImageElement): string | null {
   return null;
 }
 
+async function resolveImageDataUrlAsync(src: string): Promise<string | null> {
+  if (!src) return null;
+  if (src.startsWith('data:')) return src;
+  const cached = blobDataUrlCache.get(src);
+  if (cached) return cached;
+
+  if (typeof GM_xmlhttpRequest === 'function' && /^https?:/i.test(src)) {
+    const dataUrl = await new Promise<string | null>((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: src,
+        responseType: 'blob',
+        onload(res) {
+          if (res.status >= 200 && res.status < 300 && res.response instanceof Blob) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              resolve(typeof reader.result === 'string' ? reader.result : null);
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(res.response);
+          } else {
+            resolve(null);
+          }
+        },
+        onerror: () => resolve(null),
+      });
+    });
+    if (dataUrl) {
+      blobDataUrlCache.set(src, dataUrl);
+      return dataUrl;
+    }
+  }
+
+  return null;
+}
+
+export function normalizeMarkdownHref(
+  rawHref: string,
+  baseUrl = typeof location !== 'undefined' && /^https?:/.test(location.origin)
+    ? location.origin
+    : 'https://aistudio.google.com'
+): string {
+  let href = rawHref.trim();
+  if (!href) return '';
+  if (href.startsWith('https://www.google.com/url?sa=')) {
+    try {
+      href = new URL(href).searchParams.get('q') ?? href;
+    } catch {}
+  }
+  try {
+    // * 补全相对路径并自动转义空格与引号，防止 Google Search Suggestions 链接在 Markdown 中被空格截断
+    const normalized = new URL(href, baseUrl).href;
+    return normalized.replace(/\(/g, '%28').replace(/\)/g, '%29');
+  } catch {
+    return href
+      .replace(/\s+/g, '%20')
+      .replace(/"/g, '%22')
+      .replace(/\(/g, '%28')
+      .replace(/\)/g, '%29');
+  }
+}
+
+export function isContentImageElement(img: HTMLImageElement): boolean {
+  const src = (img.currentSrc || img.src || '').trim();
+  if (!src) return false;
+  const alt = (img.alt || '').trim().toLowerCase();
+  // ! 排除 Gemini 思考块、搜索来源卡片、头像、按钮等界面图标（避免每轮重复抓取 Thinking 图标转 Base64）
+  if (alt === 'thinking') return false;
+  if (
+    img.closest(
+      'ms-thought-chunk, ms-grounding-chunk, ms-search-entry-point, .thought-header, .author-label, button, [role="button"], .actions-container, mat-icon, .icon, .avatar'
+    )
+  ) {
+    return false;
+  }
+  if (/gstatic\.com\/aistudio\/|fonts\.gstatic\.com/i.test(src)) return false;
+  return true;
+}
+
 function htmlToMarkdown(node: Node | null): string {
   if (!node) return '';
   if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? '';
@@ -81,7 +170,6 @@ function htmlToMarkdown(node: Node | null): string {
   const el = node as HTMLElement;
   const tagName = el.tagName.toLowerCase();
 
-  // # 忽略思考块、图片控制栏与 Material 图标字体文字（避免出现 download fullscreen 乱码）
   if (
     tagName === 'ms-thought-chunk' ||
     tagName === 'ms-image-chunk' ||
@@ -100,6 +188,14 @@ function htmlToMarkdown(node: Node | null): string {
     return `\n\n\`\`\`${lang}\n${code}\n\`\`\`\n\n`;
   }
 
+  if (
+    el.classList.contains('sources-title') ||
+    el.classList.contains('grounding-sources-title') ||
+    (tagName === 'div' && el.textContent?.trim() === 'Sources' && el.children.length === 0)
+  ) {
+    return '\n\n#### Sources\n\n';
+  }
+
   let childrenMd = '';
   for (const child of el.childNodes) {
     childrenMd += htmlToMarkdown(child);
@@ -114,14 +210,30 @@ function htmlToMarkdown(node: Node | null): string {
     case 'em':
     case 'i':
       return `*${childrenMd}*`;
+    case 'code': {
+      if (el.closest('pre, ms-code-block')) return childrenMd;
+      const text = childrenMd.trim();
+      return text.includes('`') ? `\`\` ${text} \`\`` : `\`${text}\``;
+    }
+    case 'pre': {
+      if (el.closest('ms-code-block')) return childrenMd;
+      return `\n\n\`\`\`\n${(el.textContent ?? '').trimEnd()}\n\`\`\`\n\n`;
+    }
+    case 'blockquote': {
+      const quoted = childrenMd
+        .trim()
+        .split('\n')
+        .map((line) => (line.trim() ? `> ${line}` : '>'))
+        .join('\n');
+      return `\n\n${quoted}\n\n`;
+    }
+    case 'hr':
+      return '\n\n---\n\n';
     case 'a': {
-      let href = el.getAttribute('href') ?? '';
-      if (href.startsWith('https://www.google.com/url?sa=')) {
-        try {
-          href = new URL(href).searchParams.get('q') ?? href;
-        } catch {}
-      }
-      return `[${childrenMd}](${href})`;
+      const rawHref = el.getAttribute('href') ?? '';
+      const href = normalizeMarkdownHref(rawHref);
+      const label = childrenMd.replace(/\s+/g, ' ').trim() || href;
+      return href ? `[${label}](${href})` : label;
     }
     case 'ul':
     case 'ol':
@@ -129,8 +241,13 @@ function htmlToMarkdown(node: Node | null): string {
     case 'li': {
       const parentList = el.closest('ul, ol');
       if (parentList?.tagName.toLowerCase() === 'ol') {
-        const items = Array.from(parentList.querySelectorAll(':scope > li'));
-        const idx = items.indexOf(el) + 1;
+        // * 兼容 Angular 在 <ol> 内套一层容器节点的情况，避免 :scope > li 匹配失败导致编号变成 0.
+        const items = Array.from<HTMLElement>(parentList.querySelectorAll('li')).filter(
+          (li) => li.closest('ul, ol') === parentList
+        );
+        const startAttr = Number.parseInt(parentList.getAttribute('start') ?? '1', 10);
+        const baseStart = Number.isFinite(startAttr) ? startAttr : 1;
+        const idx = Math.max(0, items.indexOf(el)) + baseStart;
         return `${idx}. ${childrenMd.trim()}\n`;
       }
       return `* ${childrenMd.trim()}\n`;
@@ -152,7 +269,7 @@ function htmlToMarkdown(node: Node | null): string {
   }
 }
 
-export class ChatExporterEngine {
+export class ChatExporter {
   readonly #turnsMap = new Map<string, TurnSnapshot>();
   readonly #orderedIds: string[] = [];
 
@@ -173,19 +290,20 @@ export class ChatExporterEngine {
 
     const timestamp = turn.querySelector('.author-label .timestamp')?.textContent?.trim() ?? '';
 
-    // 1. 提取 <ms-image-chunk> 中的图片并转为 Base64 缓存
     const images: ImageAttachment[] = [];
     const imgElements = turn.querySelectorAll<HTMLImageElement>(
       'ms-image-chunk img.loaded-image, ms-prompt-chunk img'
     );
     for (const imgEl of imgElements) {
-      const dataUrl = imageElementToDataUrl(imgEl);
-      if (dataUrl) {
-        images.push({
-          alt: imgEl.alt || 'image.png',
-          dataUrl,
-        });
-      }
+      if (!isContentImageElement(imgEl)) continue;
+      const src = imgEl.currentSrc || imgEl.src;
+      if (!src) continue;
+      const dataUrl = tryCanvasToDataUrl(imgEl);
+      images.push({
+        alt: imgEl.alt || 'image.png',
+        src,
+        dataUrl,
+      });
     }
 
     const contentRoot = turn.querySelector<HTMLElement>(
@@ -311,11 +429,37 @@ export class ChatExporterEngine {
     };
   }
 
-  exportSnapshot(options: ExportOptions, customOrder?: string[]): void {
+  // * 对画布导出失败的跨域图片，通过油猴接口补拉转 Base64，仍失败时保留原图链接
+  async #hydrateImagesIfNeeded(order: string[], includeBase64: boolean): Promise<void> {
+    if (!includeBase64) return;
+    for (const id of order) {
+      const snap = this.#turnsMap.get(id);
+      if (!snap || snap.images.length === 0) continue;
+      let changed = false;
+      const updatedImages: ImageAttachment[] = [];
+      for (const img of snap.images) {
+        if (img.dataUrl) {
+          updatedImages.push(img);
+        } else {
+          const fetched = await resolveImageDataUrlAsync(img.src);
+          if (fetched) changed = true;
+          updatedImages.push({ ...img, dataUrl: fetched });
+        }
+      }
+      if (changed) {
+        this.#turnsMap.set(id, { ...snap, images: updatedImages });
+      }
+    }
+  }
+
+  async exportSnapshot(options: ExportOptions, customOrder?: string[]): Promise<void> {
     this.captureVisibleTurns();
     const order = customOrder && customOrder.length > 0 ? customOrder : this.#orderedIds;
+    await this.#hydrateImagesIfNeeded(order, options.includeImagesBase64);
+
     const meta = this.collectSessionMetadata(options.includeSystem);
     const date = new Date().toISOString().slice(0, 10);
+    const isEn = resolveLocale() === 'en';
 
     let title = meta.title;
     let systemPrompt = meta.systemInstructions;
@@ -343,9 +487,11 @@ export class ChatExporterEngine {
         if (options.includeThoughts && thoughts) msg.thoughts = thoughts;
         if (md) msg.content = md;
         if (item.images.length > 0) {
-          msg.images = options.includeImagesBase64
-            ? item.images
-            : item.images.map((img) => ({ alt: img.alt }));
+          msg.images = item.images.map((img) =>
+            options.includeImagesBase64 && img.dataUrl
+              ? { alt: img.alt, dataUrl: img.dataUrl }
+              : { alt: img.alt, src: img.src }
+          );
         }
         history.push(msg);
       }
@@ -390,10 +536,14 @@ export class ChatExporterEngine {
       }
       lines.push('tags:', '  - "aistudio"');
       if (meta.modelId) lines.push(`  - "${meta.modelId}"`);
-      if (systemPrompt) {
-        lines.push(`system_instructions: |\n  ${systemPrompt.replace(/\n/g, '\n  ')}`);
-      }
       lines.push('---', '', `# ${title}`, '');
+      if (systemPrompt) {
+        const sysHeading = isEn ? 'System Instructions' : '系统提示词 (System Instructions)';
+        lines.push(
+          `<details>\n<summary>${sysHeading}</summary>\n\n${systemPrompt}\n\n</details>`,
+          ''
+        );
+      }
 
       for (const id of order) {
         const item = this.#turnsMap.get(id);
@@ -403,10 +553,10 @@ export class ChatExporterEngine {
 
         const imgLines: string[] = [];
         for (const img of item.images) {
-          if (options.includeImagesBase64) {
+          if (options.includeImagesBase64 && img.dataUrl) {
             imgLines.push(`![${img.alt}](${img.dataUrl})`);
           } else {
-            imgLines.push(`> [上传图片附件: ${img.alt}]`);
+            imgLines.push(`![${img.alt}](${img.src})`);
           }
         }
 
@@ -415,7 +565,8 @@ export class ChatExporterEngine {
         }
 
         if (options.includeThoughts && thoughts) {
-          text = `<details>\n<summary>Gemini 思考过程 (Thoughts)</summary>\n\n${thoughts}\n\n</details>\n\n${text}`;
+          const thoughtHeading = isEn ? "Gemini's Thoughts" : 'Gemini 思考过程 (Thoughts)';
+          text = `<details>\n<summary>${thoughtHeading}</summary>\n\n${thoughts}\n\n</details>\n\n${text}`;
         }
 
         if (text) {
@@ -441,11 +592,12 @@ export class ChatExporterEngine {
   }
 
   async performFullScrollExport(
-    trimmer: DomTrimmerEngine,
+    trimmer: DomTrimmer,
     trimmerCfg: TrimmerConfig,
     options: ExportOptions,
     onProgress: (statusText: string) => void
   ): Promise<void> {
+    const isEn = resolveLocale() === 'en';
     let scrollEl: HTMLElement = document.documentElement;
     const sampleTurn = document.querySelector<HTMLElement>('ms-chat-turn');
     if (sampleTurn) {
@@ -462,7 +614,7 @@ export class ChatExporterEngine {
 
     const originalScrollTop = scrollEl.scrollTop;
     trimmer.restoreAll();
-    onProgress('正滚回页面顶部...');
+    onProgress(isEn ? 'Scrolling to top...' : '正滚回顶部...');
 
     let prevTop = -1;
     while (scrollEl.scrollTop > 0 && scrollEl.scrollTop !== prevTop) {
@@ -487,7 +639,9 @@ export class ChatExporterEngine {
         this.captureTurnElement(t);
       }
 
-      onProgress(`已扫描 ${chronologicalIds.length} 条对话...`);
+      onProgress(
+        isEn ? `Scanned ${chronologicalIds.length}...` : `已扫描 ${chronologicalIds.length} 条...`
+      );
       const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
       if (scrollEl.scrollTop >= maxScroll || scrollEl.scrollTop === lastScroll) {
         break;
@@ -497,7 +651,7 @@ export class ChatExporterEngine {
       await new Promise((r) => setTimeout(r, 120));
     }
 
-    this.exportSnapshot(options, chronologicalIds);
+    await this.exportSnapshot(options, chronologicalIds);
     scrollEl.scrollTop = originalScrollTop;
     if (trimmerCfg.enabled) {
       trimmer.resetToBaseVisible(trimmerCfg);

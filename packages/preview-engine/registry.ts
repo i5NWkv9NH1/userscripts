@@ -3,20 +3,16 @@ import type { LensExtractor, ResolvedMedia } from './types.ts';
 export class ExtractorRegistry {
   readonly #extractors: LensExtractor[] = [];
   readonly #cache = new WeakMap<Element, Map<string, ResolvedMedia>>();
-  // # DeekSeep 修改
-  #cachedKey: string = '';
-
+  #cachedKey = '';
   #activeExtractors: LensExtractor[] | null = null;
 
   register(...items: LensExtractor[]): this {
     this.#extractors.push(...items);
     this.#activeExtractors = null;
-    // # DeekSeep 修改
     this.#cachedKey = '';
     return this;
   }
 
-  // # DeekSeep 修改
   getActiveExtractors(currentUrl = new URL(location.href)): LensExtractor[] {
     const key = currentUrl.hostname + currentUrl.pathname;
     if (this.#activeExtractors && this.#cachedKey === key) {
@@ -33,25 +29,11 @@ export class ExtractorRegistry {
     return this.#activeExtractors;
   }
 
-  // getActiveExtractors(currentUrl = new URL(location.href)): LensExtractor[] {
-  //   if (this.#activeExtractors && this.#cachedHost === currentUrl.hostname) {
-  //     return this.#activeExtractors;
-  //   }
-  //   this.#cachedHost = currentUrl.hostname;
-  //   this.#activeExtractors = this.#extractors
-  //     .filter((ext) =>
-  //       typeof ext.match === 'function'
-  //         ? ext.match(currentUrl)
-  //         : ext.match.test(currentUrl.hostname)
-  //     )
-  //     .sort((a, b) => Number(Boolean(a.isFallback)) - Number(Boolean(b.isFallback)));
-  //   return this.#activeExtractors;
-  // }
-
   async resolveElement(
     matchedEl: HTMLElement,
     extractor: LensExtractor,
-    currentUrl = new URL(location.href)
+    currentUrl = new URL(location.href),
+    isGalleryScan = false
   ): Promise<ResolvedMedia | null> {
     let elMap = this.#cache.get(matchedEl);
     const cached = elMap?.get(extractor.id);
@@ -60,6 +42,7 @@ export class ExtractorRegistry {
     const resolved = await extractor.resolve(matchedEl, {
       url: currentUrl,
       target: matchedEl,
+      isGalleryScan,
     });
 
     if (resolved) {
@@ -75,7 +58,7 @@ export class ExtractorRegistry {
   async resolveFromHoverTarget(
     rawTarget: EventTarget | null
   ): Promise<{ anchorEl: HTMLElement; media: ResolvedMedia; extractor: LensExtractor } | null> {
-    if (!(rawTarget instanceof HTMLElement)) return null;
+    if (!(rawTarget instanceof Element)) return null;
 
     const currentUrl = new URL(location.href);
     const active = this.getActiveExtractors(currentUrl);
@@ -84,7 +67,7 @@ export class ExtractorRegistry {
       const matchedEl = rawTarget.closest<HTMLElement>(extractor.selector);
       if (!matchedEl) continue;
 
-      const media = await this.resolveElement(matchedEl, extractor, currentUrl);
+      const media = await this.resolveElement(matchedEl, extractor, currentUrl, false);
       if (media) {
         return { anchorEl: matchedEl, media, extractor };
       }
@@ -105,7 +88,7 @@ export class ExtractorRegistry {
     for (const extractor of active) {
       const nodes = Array.from(document.querySelectorAll<HTMLElement>(extractor.selector));
       const resolvedList = await Promise.all(
-        nodes.map((node) => this.resolveElement(node, extractor, currentUrl))
+        nodes.map((node) => this.resolveElement(node, extractor, currentUrl, true))
       );
       for (const media of resolvedList) {
         if (media && !seenUrls.has(media.originalUrl)) {

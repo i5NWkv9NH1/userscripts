@@ -13,7 +13,11 @@ const platformStr =
   (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
   navigator.platform ??
   '';
-const isMac = /Mac|iPhone|iPad|iPod/i.test(platformStr);
+export const isMac = /Mac|iPhone|iPad|iPod/i.test(platformStr);
+
+export function getAltKeyDisplayName(): string {
+  return isMac ? 'Option (⌥)' : 'Alt';
+}
 
 export function isEditableElement(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -43,10 +47,10 @@ export function formatEventCombo(ev: KeyboardEvent): {
 
 export function formatComboLabel(combo: string): string {
   return combo
-    .replace('Meta+', isMac ? 'Cmd(⌘) + ' : 'Win + ')
-    .replace('Ctrl+', isMac ? 'Ctrl(⌃) + ' : 'Ctrl + ')
-    .replace('Alt+', isMac ? 'Opt(⌥) + ' : 'Alt + ')
-    .replace('Shift+', 'Shift + ')
+    .replace('Meta+', isMac ? 'Cmd (⌘) + ' : 'Win + ')
+    .replace('Ctrl+', isMac ? 'Ctrl (⌃) + ' : 'Ctrl + ')
+    .replace('Alt+', isMac ? 'Option (⌥) + ' : 'Alt + ')
+    .replace('Shift+', isMac ? 'Shift (⇧) + ' : 'Shift + ')
     .replace('Key', '')
     .replace('Digit', '')
     .replace('Backquote', '`');

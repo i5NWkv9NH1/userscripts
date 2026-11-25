@@ -1,12 +1,14 @@
 // packages/ui/popover/popover.ts
-import { BaseComponent, css, customElement, html } from '@core';
+import { BaseComponent, css, customElement, html, resolveLocale } from '@core';
 import { Icons, svgIcon } from '../icons/index.ts';
+import { closeTopLayerPopover } from './top-layer.ts';
 
 export type DockPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
 
 @customElement('s-popover')
 export class Popover extends BaseComponent {
   static readonly tagName = 's-popover' as const;
+  static observedAttributes = ['drag-title', 'minimize-title'];
 
   protected readonly stylesheet = css`
     :host {
@@ -21,33 +23,55 @@ export class Popover extends BaseComponent {
       -webkit-backdrop-filter: blur(24px) saturate(180%);
       color: var(--s-text);
       box-shadow: var(--s-shadow);
-      width: 340px;
+      width: 350px;
       max-width: calc(100vw - 32px);
       opacity: 0;
-      transform: translateY(10px) scale(0.96);
-      transition:
-        opacity 0.24s cubic-bezier(0.22, 1, 0.36, 1),
-        transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
-        inset 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-        display 0.24s allow-discrete,
-        overlay 0.24s allow-discrete;
+      /* * 遵循 animate-to-from-top-layer：allow-discrete 必须单独声明，不能放进 transition 简写 */
+      transition-property: opacity, transform, inset, display, overlay;
+      transition-duration: 0.24s, 0.24s, 0.28s, 0.24s, 0.24s;
+      transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+      transition-behavior: allow-discrete;
+
+      @media (prefers-reduced-motion: no-preference) {
+        transform: translateY(10px) scale(0.96);
+      }
     }
 
     :host(:popover-open) {
       opacity: 1;
-      transform: translateY(0) scale(1);
+
+      @starting-style {
+        opacity: 0;
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        transform: translateY(0) scale(1);
+
+        @starting-style {
+          transform: translateY(10px) scale(0.95);
+        }
+      }
     }
 
-    @starting-style {
-      :host(:popover-open) {
-        opacity: 0;
-        transform: translateY(10px) scale(0.95);
+    :host([data-closing]) {
+      opacity: 0;
+
+      @media (prefers-reduced-motion: no-preference) {
+        transform: translateY(10px) scale(0.96);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      :host {
+        transition-duration: 0.1s;
       }
     }
 
     .panel-header {
       padding: 11px 15px;
       border-bottom: 1px solid var(--s-border);
+      -webkit-user-select: none;
+      user-select: none;
     }
 
     .icon-btn {
@@ -67,7 +91,6 @@ export class Popover extends BaseComponent {
       &:hover {
         background: var(--s-surface-hover);
         color: var(--s-text);
-        transform: scale(1.06);
       }
     }
 
@@ -82,11 +105,40 @@ export class Popover extends BaseComponent {
     return this.$<HTMLElement>('.panel-header');
   }
 
+  protected override onAttributeChange(): void {
+    const header = this.$<HTMLElement>('.panel-header');
+    const minBtn = this.$<HTMLButtonElement>('#btn-minimize');
+    const isEn = resolveLocale() === 'en';
+    if (header) {
+      header.title =
+        this.getAttribute('drag-title') ??
+        (isEn
+          ? 'Drag to move and snap to screen edge; arrow keys work when focused'
+          : '按住这里可拖动并贴边停靠，聚焦后也可用方向键微调');
+    }
+    if (minBtn) {
+      const minLabel =
+        this.getAttribute('minimize-title') ?? (isEn ? 'Minimize to button' : '收起成小按钮');
+      minBtn.title = minLabel;
+      minBtn.setAttribute('aria-label', minLabel);
+    }
+  }
+
   protected render(): DocumentFragment {
+    const isEn = resolveLocale() === 'en';
+    const dragTitle =
+      this.getAttribute('drag-title') ??
+      (isEn
+        ? 'Drag to move and snap to screen edge; arrow keys work when focused'
+        : '按住这里可拖动并贴边停靠，聚焦后也可用方向键微调');
+    const minTitle =
+      this.getAttribute('minimize-title') ?? (isEn ? 'Minimize to button' : '收起成小按钮');
+
     return html`
       <div
+        part="header"
         class="panel-header flex items-center justify-between select-none"
-        title="按住标题栏可自由拖拽，松手自动磁吸至屏幕边缘"
+        title=${dragTitle}
       >
         <div class="font-semibold text-sm flex items-center gap-2">
           <slot name="title">Sora Panel</slot>
@@ -94,20 +146,21 @@ export class Popover extends BaseComponent {
         <div class="flex items-center gap-1">
           <slot name="header-actions"></slot>
           <button
+            id="btn-minimize"
             class="icon-btn inline-flex items-center justify-center"
             type="button"
-            title="收纳为悬浮胶囊"
+            title=${minTitle}
+            aria-label=${minTitle}
             @click=${() => {
-              if (this.matches(':popover-open')) {
-                this.hidePopover();
-              }
+              void closeTopLayerPopover(this.host);
               this.dispatchEvent(new CustomEvent('minimize', { bubbles: true, composed: true }));
-            }}>
+            }}
+          >
             ${svgIcon(Icons.minimize)}
           </button>
         </div>
       </div>
-      <div class="panel-body flex flex-col gap-3">
+      <div part="body" class="panel-body flex flex-col gap-3">
         <slot></slot>
       </div>
     `;

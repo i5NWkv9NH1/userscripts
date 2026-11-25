@@ -1,6 +1,10 @@
 # dependencies (bun install)
 node_modules
 
+# skills directories (tracked via skills-lock.json)
+.agents/skills/
+.claude/skills/
+
 # output
 out
 *.tgz

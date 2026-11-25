@@ -1,24 +1,34 @@
-// sites/aistudio/index.ts
 import {
   BaseComponent,
+  createComponent,
   createLogger,
   customElement,
+  getAltKeyDisplayName,
   html,
-  type ShortcutController,
-  type SnapPositionController,
-  type SnapPresetName,
+  mountComponent,
+  resolveLocale,
+  useI18n,
   useObserver,
-  useShortcut,
-  useSnapPosition,
   useStorage,
 } from '@core';
-import { Icons, Popover, Switch, svgIcon } from '@ui';
-import { ChatExporterEngine, type ExportFormat } from './features/chat-exporter.ts';
-import { DomTrimmerEngine, type TrimmerConfig } from './features/dom-trimmer.ts';
-import { type LayoutGuardConfig, LayoutGuardEngine } from './features/layout-guard.ts';
+import {
+  type DockAppController,
+  DockShell,
+  Icons,
+  SettingRow,
+  Switch,
+  svgIcon,
+  useDockApp,
+} from '@ui';
+import { ChatExporter, type ExportFormat } from './features/chat-exporter.ts';
+import { DomTrimmer, type TrimmerConfig } from './features/dom-trimmer.ts';
+import { LayoutGuard, type LayoutGuardConfig } from './features/layout-guard.ts';
+import { PromptQuickbar } from './features/prompt-quickbar.ts';
+import { AISTUDIO_DICT } from './locales.ts';
 import styleText from './style.css';
 
-void Popover;
+void DockShell;
+void SettingRow;
 void Switch;
 
 const logger = createLogger('AIStudio');
@@ -53,61 +63,38 @@ const exportCfgStore = useStorage<{
   stripEmojis: false,
 });
 
-const collapsedStore = useStorage<boolean>('aistudio.collapsed', false);
-
-const SNAP_PRESETS: { id: SnapPresetName; label: string }[] = [
-  { id: 'top-left', label: '左上' },
-  { id: 'center-left', label: '左中' },
-  { id: 'bottom-left', label: '左下' },
-  { id: 'top-right', label: '右上' },
-  { id: 'center-right', label: '右中' },
-  { id: 'bottom-right', label: '右下' },
-];
-
 @customElement('s-aistudio-app')
 export class AIStudioApp extends BaseComponent {
   static readonly tagName = 's-aistudio-app' as const;
   protected readonly stylesheet = styleText;
 
   #lastPathname = location.pathname;
-  #exporter = new ChatExporterEngine();
-  #layoutGuard = new LayoutGuardEngine();
-  #trimmer = new DomTrimmerEngine({
+  #exporter = new ChatExporter();
+  #layoutGuard = new LayoutGuard();
+  #quickbar = createComponent(PromptQuickbar);
+  #dock: DockAppController | null = null;
+  #observerDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  #trimmer = new DomTrimmer({
     onBeforeDetach: (turnEl) => this.#exporter.captureTurnElement(turnEl),
     onStatsChange: (st) => {
+      const t = AISTUDIO_DICT[resolveLocale()];
       const statEl = this.$<HTMLElement>('#trim-stats');
       const limitEl = this.$<HTMLElement>('#trim-limit');
-      const orbBadge = this.$<HTMLElement>('#orb-badge');
       if (statEl) {
-        statEl.textContent = `当前显示 ${st.visibleRounds} 轮问答 · 已收起 ${st.totalArchivedRounds} 轮`;
+        statEl.textContent = t.statsText
+          .replace('{visible}', String(st.visibleRounds))
+          .replace('{archived}', String(st.totalArchivedRounds));
       }
       if (limitEl) {
-        limitEl.textContent = `保留上限: ${st.currentLimit} 轮 (DOM隐藏 ${st.hiddenInDomRounds} / 内存归档 ${st.detachedInMemRounds})`;
+        limitEl.textContent = t.limitText
+          .replace('{limit}', String(st.currentLimit))
+          .replace('{hidden}', String(st.hiddenInDomRounds))
+          .replace('{detached}', String(st.detachedInMemRounds));
       }
-      if (orbBadge) {
-        orbBadge.textContent = String(st.visibleRounds);
-      }
+      this.#dock?.setBadge(String(st.visibleRounds));
     },
   });
-
-  #snapPos!: SnapPositionController;
-  #shortcut!: ShortcutController;
-
-  #setCollapsed(collapsed: boolean): void {
-    collapsedStore.set(collapsed);
-    const pop = this.$<Popover>('#studio-pop');
-    const orb = this.$<HTMLElement>('#studio-orb');
-    if (!pop || !orb) return;
-
-    if (collapsed) {
-      if (pop.matches(':popover-open')) pop.hidePopover();
-      if (!orb.matches(':popover-open')) orb.showPopover();
-    } else {
-      if (orb.matches(':popover-open')) orb.hidePopover();
-      if (!pop.matches(':popover-open')) pop.showPopover();
-    }
-    requestAnimationFrame(() => this.#snapPos.syncTargets([pop, orb]));
-  }
 
   #updateTrimmerPatch(patch: Partial<TrimmerConfig>): void {
     const next = { ...trimmerStore.get(), ...patch };
@@ -121,260 +108,326 @@ export class AIStudioApp extends BaseComponent {
     this.#layoutGuard.syncConfig(next);
   }
 
+  #syncLocaleTexts(): void {
+    const t = AISTUDIO_DICT[resolveLocale()];
+    const mod = getAltKeyDisplayName();
+    this.#dock?.syncTitles(t.appName, t.panelTitle);
+
+    const setRow = (id: string, label: string, hint = '') => {
+      const el = this.$<SettingRow>(id);
+      if (!el) return;
+      el.setAttribute('label', label);
+      el.setAttribute('hint', hint);
+    };
+    const setText = (sel: string, txt: string) => {
+      const el = this.$<HTMLElement>(sel);
+      if (el) el.textContent = txt;
+    };
+    const setTitle = (sel: string, txt: string) => {
+      const el = this.$<HTMLElement>(sel);
+      if (el) el.title = txt;
+    };
+
+    setRow('#row-guard', t.guardLabel, t.guardHint.replace('{mod}', mod));
+    setRow('#row-draft', t.draftLabel, t.draftHint);
+    setRow('#row-hide-left', t.hideLeftLabel);
+    setRow('#row-hide-right', t.hideRightLabel);
+    setRow('#row-trim', t.trimLabel, t.trimHint);
+    setRow('#row-base-max', t.baseMaxLabel, t.baseMaxHint);
+    setRow('#row-max-cache', t.maxCacheLabel, t.maxCacheHint);
+    setRow('#row-restore-step', t.restoreStepLabel, t.restoreStepHint);
+    setRow('#row-exp-thoughts', t.exportThoughtsLabel);
+    setRow('#row-exp-system', t.exportSystemLabel);
+    setRow('#row-exp-images', t.exportImagesLabel, t.exportImagesHint);
+    setRow('#row-exp-emoji', t.exportEmojiLabel, t.exportEmojiHint);
+
+    setText('#btn-collapse-text', t.collapseCodeBtn);
+    setTitle('#btn-collapse-code', t.collapseCodeTitle);
+    setText('#btn-expand-text', t.expandCodeBtn);
+    setTitle('#btn-expand-code', t.expandCodeTitle);
+    setText('#btn-scroll-text', t.scrollLatestBtn);
+    setTitle('#btn-scroll-latest', t.scrollLatestTitle);
+    setText(
+      '#btn-restore-step',
+      t.restoreBtn.replace('{step}', String(trimmerStore.get().restoreStep))
+    );
+    setText('#btn-reset-trim', t.resetTrimBtn);
+    setText('#lbl-export-title', t.exportTitle);
+    setText('#lbl-export-hint', t.exportHint);
+    setText('#btn-export-now-text', t.exportNowBtn);
+    setText('#btn-deep-scan', t.exportFullBtn);
+  }
+
   protected render(): DocumentFragment {
+    const t = AISTUDIO_DICT[resolveLocale()];
+    const mod = getAltKeyDisplayName();
     const tCfg = trimmerStore.get();
 
     return html`
-      <button
-        id='studio-orb'
-        type='button'
-        popover='manual'
-        class='studio-orb select-none'
-        title='按住可自由拖动磁吸，点击展开 AI Studio 助手面板'
-      >
-        ${svgIcon(Icons.sparkles)}
-        <span>AI Studio 助手</span>
-        <span id='orb-badge' class='s-badge font-mono'>0</span>
-      </button>
+      <s-dock-shell id="dock">
+        <span slot="icon">${svgIcon(Icons.sparkles)}</span>
+        <span slot="panel-icon">${svgIcon(Icons.sparkles)}</span>
 
-      <s-popover
-        id='studio-pop'
-        popover='manual'
-        @minimize=${() => this.#setCollapsed(true)}
-      >
-        <span slot='title' class='flex items-center gap-2'>
-          ${svgIcon(Icons.sparkles)}
-          <span>AI Studio 防卡顿与导出助手</span>
-        </span>
-
-        <div class='stats-card flex items-center justify-between gap-2'>
+        <div class="stats-card flex flex-col gap-2">
           <div>
-            <div id='guard-tip' class='text-xs font-semibold'>
-              <span id='trim-stats'>当前页面显示 0 条 · 已自动收起 0 条旧对话</span>
+            <div id="guard-tip" class="text-xs font-semibold">
+              <span id="trim-stats">...</span>
             </div>
-            <div id='trim-limit' class='text-xs font-mono text-muted'>
-              当前显示上限: ${tCfg.baseMaxVisible} 条
-            </div>
+            <div id="trim-limit" class="text-xs font-mono text-muted">...</div>
           </div>
-          <button
-            type='button'
-            class='s-btn'
-            title='把当前网页里所有展开的长代码块一键收起'
-            @click=${() => {
-              const c = this.#trimmer.collapseAllCodeBlocks();
-              logger.info(`已一键收起 ${c} 个代码块`);
-            }}
-          >
-            收起全部代码块
-          </button>
+          <div class="flex gap-2">
+            <button
+              id="btn-collapse-code"
+              type="button"
+              class="s-btn flex-1"
+              title=${t.collapseCodeTitle}
+              @click=${() => {
+                const c = this.#trimmer.collapseAllCodeBlocks();
+                logger.info(`已收起 ${c} 个代码块`);
+              }}
+            >
+              ${svgIcon(Icons.collapseCode)}
+              <span id="btn-collapse-text">${t.collapseCodeBtn}</span>
+            </button>
+            <button
+              id="btn-expand-code"
+              type="button"
+              class="s-btn flex-1"
+              title=${t.expandCodeTitle}
+              @click=${() => {
+                const c = this.#trimmer.expandAllCodeBlocks();
+                logger.info(`已展开 ${c} 个代码块`);
+              }}
+            >
+              ${svgIcon(Icons.expandCode)}
+              <span id="btn-expand-text">${t.expandCodeBtn}</span>
+            </button>
+            <button
+              id="btn-scroll-latest"
+              type="button"
+              class="s-btn flex-1"
+              title=${t.scrollLatestTitle}
+              @click=${() => {
+                this.#trimmer.scrollToLatestTurn();
+              }}
+            >
+              ${svgIcon(Icons.arrowDown)}
+              <span id="btn-scroll-text">${t.scrollLatestBtn}</span>
+            </button>
+          </div>
         </div>
 
-        <div class='flex items-center justify-between gap-4'>
-          <div>
-            <div class='text-sm font-medium'>防误触离开网页保护</div>
-            <div class='text-xs text-muted'>阻止误点左侧菜单中断 AI 回答 (需按住 Alt+左键才跳转)</div>
-          </div>
+        <s-setting-row
+          id="row-guard"
+          label=${t.guardLabel}
+          hint=${t.guardHint.replace('{mod}', mod)}
+        >
           <s-switch
-            id='sw-guard'
+            id="sw-guard"
             @change=${(e: CustomEvent<boolean>) => {
               this.#updateLayoutPatch({ guardNavigation: e.detail });
             }}
           ></s-switch>
-        </div>
+        </s-setting-row>
 
-        <div class='flex items-center justify-between gap-4'>
-          <div>
-            <div class='text-sm font-medium'>提问输入框草稿自动防丢</div>
-            <div class='text-xs text-muted'>打字时实时保存草稿，意外刷新网页后自动恢复未发送内容</div>
-          </div>
+        <s-setting-row id="row-draft" label=${t.draftLabel} hint=${t.draftHint}>
           <s-switch
-            id='sw-draft'
+            id="sw-draft"
             @change=${(e: CustomEvent<boolean>) => {
               this.#updateLayoutPatch({ savePromptDraft: e.detail });
             }}
           ></s-switch>
-        </div>
+        </s-setting-row>
 
-        <div class='flex items-center justify-between gap-4 text-xs'>
-          <span>简洁模式：隐藏网页左侧历史导航栏</span>
+        <s-setting-row id="row-hide-left" compact label=${t.hideLeftLabel}>
           <s-switch
-            id='sw-hide-left'
+            id="sw-hide-left"
             @change=${(e: CustomEvent<boolean>) => {
               this.#updateLayoutPatch({ hideLeftNavbar: e.detail });
             }}
           ></s-switch>
-        </div>
+        </s-setting-row>
 
-        <div class='flex items-center justify-between gap-4 text-xs'>
-          <span>简洁模式：隐藏网页右侧模型参数栏</span>
+        <s-setting-row id="row-hide-right" compact label=${t.hideRightLabel}>
           <s-switch
-            id='sw-hide-right'
+            id="sw-hide-right"
             @change=${(e: CustomEvent<boolean>) => {
               this.#updateLayoutPatch({ hideRightPanel: e.detail });
             }}
           ></s-switch>
+        </s-setting-row>
+
+        <div class="section-divider"></div>
+
+        <s-setting-row id="row-trim" label=${t.trimLabel} hint=${t.trimHint}>
+          <s-switch
+            id="sw-trim"
+            @change=${(e: CustomEvent<boolean>) => {
+              this.#updateTrimmerPatch({ enabled: e.detail });
+            }}
+          ></s-switch>
+        </s-setting-row>
+
+        <s-setting-row id="row-base-max" compact label=${t.baseMaxLabel} hint=${t.baseMaxHint}>
+          <input
+            id="inp-base-max"
+            type="number"
+            min="0"
+            class="num-input font-mono"
+            value=${String(tCfg.baseMaxVisible)}
+            @change=${(e: Event) => {
+              const raw = Number((e.currentTarget as HTMLInputElement).value);
+              const v = Number.isNaN(raw) ? 35 : Math.max(0, raw);
+              this.#updateTrimmerPatch({ baseMaxVisible: v });
+            }}
+          />
+        </s-setting-row>
+
+        <s-setting-row id="row-max-cache" compact label=${t.maxCacheLabel} hint=${t.maxCacheHint}>
+          <input
+            id="inp-max-cache"
+            type="number"
+            min="10"
+            class="num-input font-mono"
+            value=${String(tCfg.maxCache)}
+            @change=${(e: Event) => {
+              const raw = Number((e.currentTarget as HTMLInputElement).value);
+              const v = Number.isNaN(raw) ? 50 : Math.max(10, raw);
+              this.#updateTrimmerPatch({ maxCache: v });
+            }}
+          />
+        </s-setting-row>
+
+        <s-setting-row
+          id="row-restore-step"
+          compact
+          label=${t.restoreStepLabel}
+          hint=${t.restoreStepHint}
+        >
+          <input
+            id="inp-restore-step"
+            type="number"
+            min="1"
+            class="num-input font-mono"
+            value=${String(tCfg.restoreStep)}
+            @change=${(e: Event) => {
+              const v = Math.max(1, Number((e.currentTarget as HTMLInputElement).value) || 10);
+              this.#updateTrimmerPatch({ restoreStep: v });
+              const btn = this.$<HTMLButtonElement>('#btn-restore-step');
+              if (btn) {
+                btn.textContent = AISTUDIO_DICT[resolveLocale()].restoreBtn.replace(
+                  '{step}',
+                  String(v)
+                );
+              }
+            }}
+          />
+        </s-setting-row>
+
+        <div class="flex gap-2">
+          <button
+            id="btn-restore-step"
+            type="button"
+            class="s-btn flex-1"
+            @click=${() => {
+              this.#trimmer.restoreStep(trimmerStore.get());
+            }}
+          >
+            ${t.restoreBtn.replace('{step}', String(tCfg.restoreStep))}
+          </button>
+          <button
+            id="btn-reset-trim"
+            type="button"
+            class="s-btn flex-1"
+            @click=${() => {
+              this.#trimmer.resetToBaseVisible(trimmerStore.get());
+            }}
+          >
+            ${t.resetTrimBtn}
+          </button>
         </div>
 
-        <div class='section-divider'></div>
+        <div class="section-divider"></div>
 
-        <div class='flex items-center justify-between gap-4'>
-            <div>
-                <div class='text-sm font-medium'>长对话自动防卡顿</div>
-                <div class='text-xs text-muted'>对话变长时自动收起早期问答，解决打字和滚动卡顿</div>
-            </div>
-            <s-switch
-                id='sw-trim'
-                @change=${(e: CustomEvent<boolean>) => {
-                  this.#updateTrimmerPatch({ enabled: e.detail });
-                }}
-                >
-                </s-switch>
-        </div>
-
-        <div class='flex items-center justify-between gap-2 text-xs'>
-            <div>
-                <div>页面保留最新问答轮数</div>
-                <div class='text-muted'>超出此轮数的旧问答会自动收起 (1轮=提问+回答，默认 35)</div>
-            </div>
-            <input
-                type='number'
-                min='0'
-                class='num-input font-mono'
-                value=${String(tCfg.baseMaxVisible)}
-                @change=${(e: Event) => {
-                  const raw = Number((e.currentTarget as HTMLInputElement).value);
-                  const v = Number.isNaN(raw) ? 35 : Math.max(0, raw);
-                  this.#updateTrimmerPatch({ baseMaxVisible: v });
-                }}
-            />
-        </div>
-
-        <div class='flex items-center justify-between gap-2 text-xs'>
-            <div>
-                <div>单次点击往回加载轮数</div>
-                <div class='text-muted'>每次点击下方「往前加载旧问答」取回的问答轮数</div>
-            </div>
-            <input
-                type='number'
-                min='1'
-                class='num-input font-mono'
-                value=${String(tCfg.restoreStep)}
-                @change=${(e: Event) => {
-                  const v = Math.max(1, Number((e.currentTarget as HTMLInputElement).value) || 10);
-                  this.#updateTrimmerPatch({ restoreStep: v });
-                  const btn = this.$<HTMLButtonElement>('#btn-restore-step');
-                  if (btn) btn.textContent = `往前加载 ${v} 轮旧问答`;
-                }}
-            />
-        </div>
-
-        <div class='flex gap-2'>
-            <button
-                id='btn-restore-step'
-                type='button'
-                class='s-btn flex-1'
-                title='临时把早期被收起的旧问答往前多显示几轮'
-                @click=${() => {
-                  this.#trimmer.restoreStep(trimmerStore.get());
-                }}
-                >
-                往前加载 ${tCfg.restoreStep} 轮旧问答
-            </button>
-            <button
-                type='button'
-                class='s-btn flex-1'
-                title='将刚刚临时展开的旧问答重新按设定轮数收起，恢复最佳流畅度'
-                @click=${() => {
-                  this.#trimmer.resetToBaseVisible(trimmerStore.get());
-                }}
-            >
-                重新按设定收起旧问答
-            </button>
-        </div>
-
-        <div class='section-divider'></div>
-
-        <div class='flex items-center justify-between gap-2'>
+        <div class="flex items-center justify-between gap-2">
           <div>
-            <div class='text-sm font-medium'>导出当前整场聊天记录</div>
-            <div class='text-xs text-muted'>自动附带账号、模型、思考等级、工具开关与系统指令</div>
+            <div id="lbl-export-title" class="text-sm font-medium">${t.exportTitle}</div>
+            <div id="lbl-export-hint" class="text-xs text-muted">${t.exportHint}</div>
           </div>
           <select
-            id='sel-fmt'
-            class='fmt-select'
+            id="sel-fmt"
+            class="fmt-select"
             @change=${(e: Event) => {
               const fmt = (e.currentTarget as HTMLSelectElement).value as ExportFormat;
               exportCfgStore.set({ ...exportCfgStore.get(), format: fmt });
             }}
           >
-            <option value='md'>Markdown (.md)</option>
-            <option value='json'>JSON (.json)</option>
+            <option value="md">Markdown (.md)</option>
+            <option value="json">JSON (.json)</option>
           </select>
         </div>
 
-        <div class='flex items-center justify-between text-xs'>
-          <span>导出 Gemini 的思考过程 (Thoughts 折叠块)</span>
+        <s-setting-row id="row-exp-thoughts" compact label=${t.exportThoughtsLabel}>
           <s-switch
-            id='sw-thoughts'
+            id="sw-thoughts"
             @change=${(e: CustomEvent<boolean>) => {
               exportCfgStore.set({ ...exportCfgStore.get(), includeThoughts: e.detail });
             }}
           ></s-switch>
-        </div>
+        </s-setting-row>
 
-        <div class='flex items-center justify-between text-xs'>
-          <span>导出 System Instructions 系统指令</span>
+        <s-setting-row id="row-exp-system" compact label=${t.exportSystemLabel}>
           <s-switch
-            id='sw-system'
+            id="sw-system"
             @change=${(e: CustomEvent<boolean>) => {
               exportCfgStore.set({ ...exportCfgStore.get(), includeSystem: e.detail });
             }}
           ></s-switch>
-        </div>
+        </s-setting-row>
 
-        <div class='flex items-center justify-between text-xs'>
-          <div>
-            <div>导出聊天中上传的图片 (转 Base64 内嵌)</div>
-            <div class='text-muted'>开启后图片直接内嵌进文档，离线也能查看</div>
-          </div>
+        <s-setting-row
+          id="row-exp-images"
+          compact
+          label=${t.exportImagesLabel}
+          hint=${t.exportImagesHint}
+        >
           <s-switch
-            id='sw-images'
+            id="sw-images"
             @change=${(e: CustomEvent<boolean>) => {
               exportCfgStore.set({ ...exportCfgStore.get(), includeImagesBase64: e.detail });
             }}
           ></s-switch>
-        </div>
+        </s-setting-row>
 
-        <div class='flex items-center justify-between text-xs'>
-          <div>
-            <div>清除聊天正文里的 Emoji 表情图标</div>
-            <div class='text-muted'>自动过滤提问与回答里的表情符号，但不会改动代码块内容</div>
-          </div>
+        <s-setting-row
+          id="row-exp-emoji"
+          compact
+          label=${t.exportEmojiLabel}
+          hint=${t.exportEmojiHint}
+        >
           <s-switch
-            id='sw-emoji'
+            id="sw-emoji"
             @change=${(e: CustomEvent<boolean>) => {
               exportCfgStore.set({ ...exportCfgStore.get(), stripEmojis: e.detail });
             }}
           ></s-switch>
-        </div>
+        </s-setting-row>
 
-        <div class='flex gap-2'>
+        <div class="flex gap-2">
           <button
-            type='button'
-            class='s-btn flex-1'
-            title='直接导出当前脚本已自动记录的对话内容，无需等待网页滚动'
+            type="button"
+            class="s-btn flex-1"
             @click=${() => {
-              this.#exporter.exportSnapshot(exportCfgStore.get());
+              void this.#exporter.exportSnapshot(exportCfgStore.get());
             }}
           >
             ${svgIcon(Icons.download)}
-            <span>导出已记录对话</span>
+            <span id="btn-export-now-text">${t.exportNowBtn}</span>
           </button>
           <button
-            id='btn-deep-scan'
-            type='button'
-            class='s-btn s-btn-primary flex-1'
-            title='自动将网页滚回最顶部并逐屏扫描到底部，确保历史长对话 100% 完整导出'
+            id="btn-deep-scan"
+            type="button"
+            class="s-btn s-btn-primary flex-1"
             @click=${async (e: MouseEvent) => {
               const btn = e.currentTarget as HTMLButtonElement;
               btn.disabled = true;
@@ -389,85 +442,18 @@ export class AIStudioApp extends BaseComponent {
                 );
               } finally {
                 btn.disabled = false;
-                btn.textContent = '滚动全页完整导出';
+                btn.textContent = AISTUDIO_DICT[resolveLocale()].exportFullBtn;
               }
             }}
           >
-            滚动全页完整导出
+            ${t.exportFullBtn}
           </button>
         </div>
-
-        <div class='section-divider'></div>
-
-        <div class='flex flex-col gap-1 text-xs'>
-            <div class='flex items-center justify-between gap-2'>
-              <span class='text-muted'>
-                面板快捷键：<span id='studio-key-label' class='s-badge font-mono'>Alt + A</span>
-              </span>
-
-              <button
-                type='button'
-                class='s-btn'
-                @click=${(e: MouseEvent) => {
-                  const btn = e.currentTarget as HTMLButtonElement;
-                  const hintEl = this.$<HTMLElement>('#studio-key-hint');
-                  btn.textContent = '请按键 (Esc取消)...';
-                  this.#shortcut.startRecording((_combo, conflict, cancelled) => {
-                    if (cancelled) {
-                      btn.textContent = '修改快捷键';
-                      if (hintEl)
-                        hintEl.textContent =
-                          '建议使用 Opt/Alt + 字母，避免覆盖 Cmd/Ctrl + S 保存热键';
-                      return;
-                    }
-                    if (_combo === null && conflict.reason) {
-                      if (hintEl) hintEl.textContent = conflict.reason;
-                      return;
-                    }
-                    btn.textContent = '修改快捷键';
-                    const lbl = this.$<HTMLElement>('#studio-key-label');
-                    if (lbl) lbl.textContent = this.#shortcut.getLabel();
-                    if (hintEl) {
-                      hintEl.textContent =
-                        conflict.reason ?? '快捷键已更新！建议使用 Opt/Alt + 字母组合';
-                    }
-                  });
-                }}
-              >
-                ${svgIcon(Icons.keyboard)}
-                <span>修改快捷键</span>
-              </button>
-            </div>
-
-            <div id='studio-key-hint' class='text-muted'>
-              建议使用 Opt/Alt + 字母，避免覆盖系统 Cmd/Ctrl + S 等默认热键
-            </div>
-        </div>
-
-
-        <div class='flex flex-col gap-1'>
-          <div class='text-xs text-muted'>面板与胶囊停靠位置（也支持按住标题栏或胶囊自由拖动磁吸）</div>
-          <div class='pos-grid'>
-            ${SNAP_PRESETS.map(
-              (p) => html`
-                <button
-                  type='button'
-                  class='pos-btn'
-                  @click=${() => this.#snapPos.applyPreset(p.id)}
-                >
-                  ${p.label}
-                </button>
-              `
-            )}
-          </div>
-        </div>
-      </s-popover>
+      </s-dock-shell>
     `;
   }
 
   protected override onMount(): void {
-    const pop = this.$<Popover>('#studio-pop');
-    const orb = this.$<HTMLElement>('#studio-orb');
     const swGuard = this.$<Switch>('#sw-guard');
     const swDraft = this.$<Switch>('#sw-draft');
     const swHideLeft = this.$<Switch>('#sw-hide-left');
@@ -478,26 +464,13 @@ export class AIStudioApp extends BaseComponent {
     const swImages = this.$<Switch>('#sw-images');
     const swEmoji = this.$<Switch>('#sw-emoji');
     const selFmt = this.$<HTMLSelectElement>('#sel-fmt');
-    const keyLbl = this.$<HTMLElement>('#studio-key-label');
-    const guardTip = this.$<HTMLElement>('#guard-tip');
-
-    this.#snapPos = useSnapPosition('aistudio', 'bottom-right', this.scope.signal);
-    this.#shortcut = useShortcut(
-      'aistudio',
-      'AI Studio 助手',
-      'Alt+KeyA',
-      () => this.#setCollapsed(!collapsedStore.get()),
-      this.scope.signal
-    );
-
-    if (keyLbl) keyLbl.textContent = this.#shortcut.getLabel();
 
     const tCfg = trimmerStore.get();
     const lCfg = layoutGuardStore.get();
     const eCfg = exportCfgStore.get();
 
-    // ? 修复：页面刷新挂载时立即将存储中的 baseMaxVisible 同步进裁剪引擎
     this.#trimmer.syncConfig(tCfg);
+    this.#layoutGuard.syncConfig(lCfg);
 
     if (swGuard) swGuard.checked = lCfg.guardNavigation;
     if (swDraft) swDraft.checked = lCfg.savePromptDraft;
@@ -509,8 +482,40 @@ export class AIStudioApp extends BaseComponent {
     if (swImages) swImages.checked = eCfg.includeImagesBase64;
     if (swEmoji) swEmoji.checked = eCfg.stripEmojis;
     if (selFmt) selFmt.value = eCfg.format;
+  }
 
-    this.#layoutGuard.syncConfig(lCfg);
+  protected override onConnect(): void {
+    const shell = this.$<DockShell>('#dock');
+    const guardTip = this.$<HTMLElement>('#guard-tip');
+
+    if (shell) {
+      this.#dock = useDockApp(shell, {
+        moduleId: 'aistudio',
+        moduleName: AISTUDIO_DICT[resolveLocale()].appName,
+        defaultPreset: 'bottom-right',
+        defaultShortcut: 'Alt+KeyA',
+        signal: this.scope.signal,
+      });
+    }
+
+    useI18n(AISTUDIO_DICT, this.scope.signal, () => this.#syncLocaleTexts());
+    this.#syncLocaleTexts();
+
+    this.#quickbar.setActions(
+      () => {
+        const c = this.#trimmer.collapseAllCodeBlocks();
+        logger.info(`已收起 ${c} 个代码块`);
+      },
+      () => {
+        const c = this.#trimmer.expandAllCodeBlocks();
+        logger.info(`已展开 ${c} 个代码块`);
+      },
+      () => {
+        this.#trimmer.scrollToLatestTurn();
+      }
+    );
+    this.#quickbar.ensureAttached();
+
     this.#layoutGuard.bindGuards(this.scope.signal, (msg) => {
       logger.warn(msg);
       if (guardTip) {
@@ -524,15 +529,7 @@ export class AIStudioApp extends BaseComponent {
       }
     });
 
-    if (pop && orb) {
-      if (pop.headerEl) {
-        this.#snapPos.bindDragHandle(pop.headerEl, [pop, orb]);
-      }
-      this.#snapPos.bindDragHandle(orb, [pop, orb], () => this.#setCollapsed(false));
-    }
-
-    this.#setCollapsed(collapsedStore.get());
-
+    // * 流式回答期间合并防抖，避免每个字都全页扫描
     useObserver(
       document.body,
       () => {
@@ -540,14 +537,20 @@ export class AIStudioApp extends BaseComponent {
           this.#lastPathname = location.pathname;
           this.#exporter.resetSession();
           this.#trimmer.resetSession(trimmerStore.get());
-          logger.info('检测到切换新对话，已自动重置裁剪与导出缓存');
+          logger.info('切换到新对话，已清空旧缓存');
         }
-        if (exportCfgStore.get().enabled) {
-          this.#exporter.captureVisibleTurns();
-        }
-        this.#trimmer.optimize(trimmerStore.get());
+        this.#quickbar.ensureAttached();
         this.#layoutGuard.checkGeneratingAndClearDraft();
         this.#layoutGuard.tryRestoreDraftOnce();
+
+        if (this.#observerDebounce !== null) clearTimeout(this.#observerDebounce);
+        this.#observerDebounce = setTimeout(() => {
+          this.#observerDebounce = null;
+          if (exportCfgStore.get().enabled) {
+            this.#exporter.captureVisibleTurns();
+          }
+          this.#trimmer.optimize(trimmerStore.get());
+        }, 250);
       },
       this.scope.signal
     );
@@ -555,15 +558,22 @@ export class AIStudioApp extends BaseComponent {
     setTimeout(() => {
       this.#exporter.captureVisibleTurns();
       this.#trimmer.optimize(trimmerStore.get());
+      this.#quickbar.ensureAttached();
       if (this.#layoutGuard.tryRestoreDraftOnce()) {
-        logger.success('已自动为您恢复上次未发送的 Prompt 草稿！');
+        logger.success('已自动恢复上次没发出去的草稿');
       }
     }, 1200);
 
-    logger.success(`AI Studio 助手已就绪！快捷键：${this.#shortcut.getLabel()}`);
+    logger.success(`AI Studio 助手已开启，快捷键：${this.#dock?.shortcut.getLabel() ?? ''}`);
+  }
+
+  protected override onDisconnect(): void {
+    if (this.#observerDebounce !== null) {
+      clearTimeout(this.#observerDebounce);
+      this.#observerDebounce = null;
+    }
+    this.#quickbar.remove();
   }
 }
 
-if (!document.querySelector(AIStudioApp.tagName)) {
-  document.documentElement.appendChild(new AIStudioApp());
-}
+mountComponent(AIStudioApp);

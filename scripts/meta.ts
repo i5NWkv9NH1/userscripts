@@ -1,7 +1,7 @@
 // scripts/meta.ts
-import type { BunPlugin } from 'bun';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { BunPlugin } from 'bun';
 
 export interface UserScriptMeta {
   name: string;
@@ -52,9 +52,7 @@ export function serializeMeta(meta: UserScriptMeta, siteDir?: string): string {
   if (iconUrl) pushLine('icon', iconUrl);
 
   for (const m of meta.match) pushLine('match', m);
-  // for (const g of meta.grant) pushLine('grant', g);
-  // ! 确保所有打包产物自动包含 @grant GM_addElement
-  const grants = Array.from(new Set([...meta.grant, 'GM_addElement']));
+  const grants = Array.from(new Set(meta.grant));
   for (const g of grants) pushLine('grant', g);
   for (const c of meta.connect ?? []) pushLine('connect', c);
   for (const r of meta.require ?? []) pushLine('require', r);
@@ -73,7 +71,7 @@ export function createDevBridgeScript(meta: UserScriptMeta, site: string, port: 
     new Set([
       ...meta.grant,
       'GM_xmlhttpRequest',
-      'GM_addElement',
+      'GM_download',
       'GM_getValue',
       'GM_setValue',
       'GM_addValueChangeListener',
@@ -98,7 +96,7 @@ export function createDevBridgeScript(meta: UserScriptMeta, site: string, port: 
     headers: { 'Cache-Control': 'no-cache' },
     onload(res) {
       if (res.status !== 200) {
-        console.error('[sora-dev] 拉取编译产物失败：', res.status);
+        console.error('[sora-dev] 拉取编译结果失败：', res.status);
         return;
       }
       try {
@@ -108,6 +106,7 @@ export function createDevBridgeScript(meta: UserScriptMeta, site: string, port: 
           'GM_addValueChangeListener',
           'GM_removeValueChangeListener',
           'GM_xmlhttpRequest',
+          'GM_download',
           res.responseText
         );
         run(
@@ -115,127 +114,335 @@ export function createDevBridgeScript(meta: UserScriptMeta, site: string, port: 
           typeof GM_setValue !== 'undefined' ? GM_setValue : undefined,
           typeof GM_addValueChangeListener !== 'undefined' ? GM_addValueChangeListener : undefined,
           typeof GM_removeValueChangeListener !== 'undefined' ? GM_removeValueChangeListener : undefined,
-          typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : undefined
+          typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : undefined,
+          typeof GM_download !== 'undefined' ? GM_download : undefined
         );
-      } catch {
-        if (typeof GM_addElement === 'function') {
-          GM_addElement(document.head || document.documentElement, 'script', {
-            textContent: res.responseText,
-          });
-        }
+      } catch (err) {
+        console.error('[sora-dev] 开发脚本执行失败：', err);
       }
     },
     onerror(err) {
-      console.error('[sora-dev] 无法连接本地 Bun JIT 网关，请确认 bun run dev 正在运行', err);
+      console.error('[sora-dev] 连不上本地开发服务，请确认已运行 bun run dev', err);
     }
   });
 })();
 `;
 }
 
+// * 仅去除注释与安全标点周围空白，绝不去掉 + 和 - 两侧空格，防止破坏 calc(100% - 20px)
 export function minifyCssString(raw: string): string {
   return raw
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\s+/g, ' ')
-    .replace(/\s*([{}:;,>+~])\s*/g, '$1')
+    .replace(/\s*([{}:;,])\s*/g, '$1')
     .trim();
 }
 
-export function minifyHtmlChunk(chunk: string): string {
-  return chunk
-    .replace(/<!--[\s\S]*?-->/g, '')
+function minifyCssChunk(raw: string, isFirst: boolean, isLast: boolean): string {
+  let out = raw
+    .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\s+/g, ' ')
-    .replace(/>\s+</g, '><')
-    .replace(/\s+>/g, '>');
+    .replace(/\s*([{}:;,])\s*/g, '$1');
+  if (isFirst) out = out.trimStart();
+  if (isLast) out = out.trimEnd();
+  return out;
 }
 
-export function minifyTaggedTemplatesInSource(source: string): string {
-  const tagRe = /\b(html|css)`/g;
-  let result = '';
-  let lastIdx = 0;
-  let match: RegExpExecArray | null;
+function minifyHtmlChunk(raw: string, isFirst: boolean, isLast: boolean): string {
+  let out = raw
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/>\s*\n\s*</g, '><')
+    .replace(/>\s*\n\s*$/g, '>')
+    .replace(/^\s*\n\s*</g, '<')
+    .replace(/\s*\n\s*/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+>/g, '>')
+    .replace(/\s+\/>/g, '/>');
+  if (isFirst) out = out.trimStart();
+  if (isLast) out = out.trimEnd();
+  return out;
+}
 
-  // biome-ignore lint/suspicious/noAssignInExpressions: exec 循环惯用写法，赋值与判空合并
-  while ((match = tagRe.exec(source)) !== null) {
-    const tag = match[1]!;
-    const startBacktick = match.index + tag.length;
-    result += source.slice(lastIdx, startBacktick + 1);
+function isIdentChar(ch: string): boolean {
+  return /[a-zA-Z0-9_$]/.test(ch);
+}
 
-    let i = startBacktick + 1;
-    let chunkStart = i;
+function skipQuoted(src: string, start: number, quote: string): number {
+  let i = start + 1;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    i++;
+  }
+  return src.length;
+}
 
-    while (i < source.length) {
-      const ch = source[i];
-      if (ch === '\\') {
-        i += 2;
-        continue;
-      }
-      if (ch === '$' && source[i + 1] === '{') {
-        const rawChunk = source.slice(chunkStart, i);
-        result += tag === 'css' ? minifyCssString(rawChunk) : minifyHtmlChunk(rawChunk);
-        result += '${';
-        i += 2;
-
-        let braceDepth = 1;
-        const exprStart = i;
-        while (i < source.length && braceDepth > 0) {
-          const c = source[i];
-          if (c === '\\') {
-            i += 2;
-            continue;
-          }
-          if (c === '{') braceDepth++;
-          else if (c === '}') braceDepth--;
-          else if (c === "'" || c === '"' || c === '`') {
-            const quote = c;
-            i++;
-            while (i < source.length && source[i] !== quote) {
-              if (source[i] === '\\') i++;
-              i++;
-            }
-          }
-          i++;
-        }
-        const innerExpr = source.slice(exprStart, i - 1);
-        result += `${minifyTaggedTemplatesInSource(innerExpr)}}`;
-        chunkStart = i;
-        continue;
-      }
-      if (ch === '`') {
-        const rawChunk = source.slice(chunkStart, i);
-        result += tag === 'css' ? minifyCssString(rawChunk) : minifyHtmlChunk(rawChunk);
-        result += '`';
-        i++;
-        break;
-      }
+function skipRegex(src: string, start: number): number {
+  let i = start + 1;
+  let inClass = false;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '[') {
+      inClass = true;
+    } else if (ch === ']' && inClass) {
+      inClass = false;
+    } else if (ch === '/' && !inClass) {
       i++;
+      while (i < src.length && /[a-z]/i.test(src[i] ?? '')) i++;
+      return i;
+    } else if (ch === '\n') {
+      return start + 1;
+    }
+    i++;
+  }
+  return src.length;
+}
+
+function canStartRegex(prevTokenChar: string, prevWord: string): boolean {
+  if (!prevTokenChar) return true;
+  if ('=([,:;!&|?{}+-*%~^<>'.includes(prevTokenChar)) return true;
+  return (
+    prevWord === 'return' ||
+    prevWord === 'throw' ||
+    prevWord === 'case' ||
+    prevWord === 'typeof' ||
+    prevWord === 'void' ||
+    prevWord === 'delete' ||
+    prevWord === 'in' ||
+    prevWord === 'of'
+  );
+}
+
+function readBalancedExprEnd(src: string, exprStart: number): number {
+  let i = exprStart;
+  let depth = 1;
+  let prevChar = '';
+  let prevWord = '';
+
+  while (i < src.length) {
+    const ch = src[i] ?? '';
+    if (ch === "'" || ch === '"') {
+      i = skipQuoted(src, i, ch);
+      prevChar = ch;
+      prevWord = '';
+      continue;
+    }
+    if (ch === '`') {
+      const parsed = readTemplateLiteral(src, i);
+      i = parsed.endIndex;
+      prevChar = '`';
+      prevWord = '';
+      continue;
+    }
+    if (src.startsWith('//', i)) {
+      const nl = src.indexOf('\n', i + 2);
+      i = nl === -1 ? src.length : nl + 1;
+      continue;
+    }
+    if (src.startsWith('/*', i)) {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    if (ch === '/' && canStartRegex(prevChar, prevWord)) {
+      i = skipRegex(src, i);
+      prevChar = '/';
+      prevWord = '';
+      continue;
+    }
+    if (ch === '{') {
+      depth++;
+      prevChar = '{';
+      prevWord = '';
+      i++;
+      continue;
+    }
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) return i;
+      prevChar = '}';
+      prevWord = '';
+      i++;
+      continue;
+    }
+    if (isIdentChar(ch)) {
+      let j = i;
+      while (j < src.length && isIdentChar(src[j] ?? '')) j++;
+      prevWord = src.slice(i, j);
+      prevChar = src[j - 1] ?? '';
+      i = j;
+      continue;
+    }
+    if (!/\s/.test(ch)) {
+      prevChar = ch;
+      prevWord = '';
+    }
+    i++;
+  }
+  return src.length;
+}
+
+function readTemplateLiteral(
+  src: string,
+  backtickStart: number
+): { chunks: string[]; exprs: string[]; endIndex: number } {
+  const chunks: string[] = [];
+  const exprs: string[] = [];
+  let i = backtickStart + 1;
+  let chunkStart = i;
+
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '`') {
+      chunks.push(src.slice(chunkStart, i));
+      return { chunks, exprs, endIndex: i + 1 };
+    }
+    if (ch === '$' && src[i + 1] === '{') {
+      chunks.push(src.slice(chunkStart, i));
+      const exprStart = i + 2;
+      const exprEnd = readBalancedExprEnd(src, exprStart);
+      exprs.push(src.slice(exprStart, exprEnd));
+      i = exprEnd + 1;
+      chunkStart = i;
+      continue;
+    }
+    i++;
+  }
+  chunks.push(src.slice(chunkStart));
+  return { chunks, exprs, endIndex: src.length };
+}
+
+// * 打包期压缩 TS 源码中的 css`...` 与 html`...` 模板字符串空白和注释，同时保留 ${...} 插值表达式
+export function minifyTaggedTemplatesInTs(src: string): string {
+  let out = '';
+  let i = 0;
+  let prevChar = '';
+  let prevWord = '';
+
+  while (i < src.length) {
+    const ch = src[i] ?? '';
+    if (ch === "'" || ch === '"') {
+      const next = skipQuoted(src, i, ch);
+      out += src.slice(i, next);
+      i = next;
+      prevChar = ch;
+      prevWord = '';
+      continue;
+    }
+    if (src.startsWith('//', i)) {
+      const nl = src.indexOf('\n', i + 2);
+      const next = nl === -1 ? src.length : nl + 1;
+      out += src.slice(i, next);
+      i = next;
+      continue;
+    }
+    if (src.startsWith('/*', i)) {
+      const end = src.indexOf('*/', i + 2);
+      const next = end === -1 ? src.length : end + 2;
+      out += src.slice(i, next);
+      i = next;
+      continue;
+    }
+    if (ch === '/' && canStartRegex(prevChar, prevWord)) {
+      const next = skipRegex(src, i);
+      out += src.slice(i, next);
+      i = next;
+      prevChar = '/';
+      prevWord = '';
+      continue;
     }
 
-    lastIdx = i;
-    tagRe.lastIndex = i;
+    if (isIdentChar(ch)) {
+      let j = i;
+      while (j < src.length && isIdentChar(src[j] ?? '')) j++;
+      const word = src.slice(i, j);
+      if ((word === 'css' || word === 'html') && src[j] === '`') {
+        const { chunks, exprs, endIndex } = readTemplateLiteral(src, j);
+        out += `${word}\``;
+        for (let idx = 0; idx < chunks.length; idx++) {
+          const chunk = chunks[idx] ?? '';
+          const isFirst = idx === 0;
+          const isLast = idx === chunks.length - 1;
+          out +=
+            word === 'css'
+              ? minifyCssChunk(chunk, isFirst, isLast)
+              : minifyHtmlChunk(chunk, isFirst, isLast);
+          if (idx < exprs.length) {
+            out += `\${${minifyTaggedTemplatesInTs(exprs[idx] ?? '')}}`;
+          }
+        }
+        out += '`';
+        i = endIndex;
+        prevChar = '`';
+        prevWord = '';
+        continue;
+      }
+      out += word;
+      prevWord = word;
+      prevChar = word[word.length - 1] ?? '';
+      i = j;
+      continue;
+    }
+
+    if (ch === '`') {
+      const { chunks, exprs, endIndex } = readTemplateLiteral(src, i);
+      out += '`';
+      for (let idx = 0; idx < chunks.length; idx++) {
+        out += chunks[idx] ?? '';
+        if (idx < exprs.length) {
+          out += `\${${minifyTaggedTemplatesInTs(exprs[idx] ?? '')}}`;
+        }
+      }
+      out += '`';
+      i = endIndex;
+      prevChar = '`';
+      prevWord = '';
+      continue;
+    }
+
+    out += ch;
+    if (!/\s/.test(ch)) {
+      prevChar = ch;
+      prevWord = '';
+    }
+    i++;
   }
 
-  result += source.slice(lastIdx);
-  return result;
+  return out;
 }
 
-export const inlineTemplateMinifierPlugin: BunPlugin = {
-  name: 'sora-inline-template-minifier',
+export const inlineAssetMinifierPlugin: BunPlugin = {
+  name: 'sora-inline-asset-minifier',
   setup(build) {
+    build.onLoad({ filter: /\.ts$/ }, async (args) => {
+      const rawTs = await Bun.file(args.path).text();
+      if (!rawTs.includes('css`') && !rawTs.includes('html`')) {
+        return { contents: rawTs, loader: 'ts' };
+      }
+      return {
+        contents: minifyTaggedTemplatesInTs(rawTs),
+        loader: 'ts',
+      };
+    });
+
     build.onLoad({ filter: /\.css$/ }, async (args) => {
       const rawCss = await Bun.file(args.path).text();
       const minified = minifyCssString(rawCss);
       return {
         contents: `export default ${JSON.stringify(minified)};`,
         loader: 'js',
-      };
-    });
-
-    build.onLoad({ filter: /\.ts$/ }, async (args) => {
-      const source = await Bun.file(args.path).text();
-      return {
-        contents: minifyTaggedTemplatesInSource(source),
-        loader: 'ts',
       };
     });
 

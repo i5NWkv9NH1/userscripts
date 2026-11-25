@@ -1,30 +1,47 @@
-import { BaseComponent, css, customElement, html } from '@core';
+import { BaseComponent, css, customElement, html, resolveLocale, useI18n } from '@core';
 import { Icons, svgIcon } from '@ui';
 import type { ExtractorRegistry } from './registry.ts';
 import type { ChipPosition, ChipStyle, ResolvedMedia } from './types.ts';
-import type { LensViewer } from './viewer-overlay.ts';
+import type { PeekViewer } from './viewer-overlay.ts';
 
 export { ExtractorRegistry } from './registry.ts';
 export type {
   ChipPosition,
   ChipStyle,
   ExtractorContext,
+  GifSaveFormat,
   LensExtractor,
   LensPreferences,
+  MediaKind,
+  PeekPreferences,
   ResolvedMedia,
+  SearchEngineId,
 } from './types.ts';
-export { LensViewer } from './viewer-overlay.ts';
+export { LensViewer, PeekViewer } from './viewer-overlay.ts';
 
-@customElement('s-lens-trigger')
-export class LensTrigger extends BaseComponent {
-  static readonly tagName = 's-lens-trigger' as const;
+const TRIGGER_DICT = {
+  'zh-CN': {
+    openPreview: '打开大图预览（支持左右方向键切换）',
+    openNewTab: '在新标签页打开原文件',
+    origTag: '原图',
+  },
+  en: {
+    openPreview: 'Open preview (Arrow Left/Right to switch)',
+    openNewTab: 'Open original in new tab',
+    origTag: 'ORIG',
+  },
+} as const;
+
+@customElement('s-peek-trigger')
+export class PeekTrigger extends BaseComponent {
+  static readonly tagName = 's-peek-trigger' as const;
   #activeMedia: ResolvedMedia | null = null;
-  #viewer: LensViewer | null = null;
+  #viewer: PeekViewer | null = null;
   #registry: ExtractorRegistry | null = null;
   #anchorEl: HTMLElement | null = null;
   #hideTimer: ReturnType<typeof setTimeout> | null = null;
   #hoveringSelf = false;
-  #chipPos: ChipPosition = 'top-right';
+  #chipPos: ChipPosition = 'top-left';
   #chipStyle: ChipStyle = 'full';
 
   protected readonly stylesheet = css`
@@ -126,7 +143,7 @@ export class LensTrigger extends BaseComponent {
   attachTo(
     anchor: HTMLElement,
     media: ResolvedMedia,
-    viewer: LensViewer,
+    viewer: PeekViewer,
     registry: ExtractorRegistry
   ): void {
     this.#clearHideTimer();
@@ -136,16 +153,15 @@ export class LensTrigger extends BaseComponent {
     this.#registry = registry;
 
     if (!this.isConnected) {
-      document.documentElement.appendChild(this);
+      this.mountTo(document.documentElement);
     }
 
     const visualTarget =
-      anchor instanceof HTMLImageElement
+      anchor instanceof HTMLImageElement || anchor instanceof HTMLVideoElement
         ? anchor
-        : (anchor.querySelector<HTMLElement>('img') ?? anchor);
+        : (anchor.querySelector<HTMLElement>('img, video') ?? anchor);
 
     const rect = visualTarget.getBoundingClientRect();
-    // if (rect.width < 20 || rect.height < 20 || rect.bottom < 0 || rect.top > window.innerHeight) {
     if (rect.width < 16 || rect.height < 16 || rect.bottom < 0 || rect.top > window.innerHeight) {
       this.dismissImmediate();
       return;
@@ -157,7 +173,8 @@ export class LensTrigger extends BaseComponent {
     if (bar) bar.setAttribute('data-style', effectiveStyle);
 
     const label = this.$<HTMLElement>('#tag-text');
-    if (label) label.textContent = media.tag ?? 'HD ORIG';
+    const locale = resolveLocale();
+    if (label) label.textContent = media.tag ?? TRIGGER_DICT[locale].origTag;
 
     if (!this.matches(':popover-open')) {
       this.showPopover();
@@ -229,7 +246,16 @@ export class LensTrigger extends BaseComponent {
     }
   }
 
+  #syncTexts(): void {
+    const t = TRIGGER_DICT[resolveLocale()];
+    const mainBtn = this.$<HTMLButtonElement>('#btn-open');
+    const tabBtn = this.$<HTMLButtonElement>('#btn-tab');
+    if (mainBtn) mainBtn.title = t.openPreview;
+    if (tabBtn) tabBtn.title = t.openNewTab;
+  }
+
   protected render(): DocumentFragment {
+    const t = TRIGGER_DICT[resolveLocale()];
     return html`
       <div
         id="toolbar"
@@ -245,9 +271,10 @@ export class LensTrigger extends BaseComponent {
         }}
       >
         <button
+          id="btn-open"
           type="button"
           class="main-btn"
-          title="点击开启无损灯箱 (支持 ← → 方向键切换上下图)"
+          title=${t.openPreview}
           @click=${(e: MouseEvent) => {
             e.stopPropagation();
             e.preventDefault();
@@ -255,13 +282,14 @@ export class LensTrigger extends BaseComponent {
           }}
         >
           ${svgIcon(Icons.lens)}
-          <span id="tag-text" class="tag-label">HD ORIG</span>
+          <span id="tag-text" class="tag-label">${t.origTag}</span>
         </button>
 
         <button
+          id="btn-tab"
           type="button"
           class="mini-action"
-          title="在新标签页打开无损原图"
+          title=${t.openNewTab}
           @click=${(e: MouseEvent) => {
             e.stopPropagation();
             e.preventDefault();
@@ -278,6 +306,11 @@ export class LensTrigger extends BaseComponent {
 
   protected override onMount(): void {
     this.setAttribute('popover', 'manual');
+    this.#syncTexts();
+  }
+
+  protected override onConnect(): void {
+    useI18n(TRIGGER_DICT, this.scope.signal, () => this.#syncTexts());
     this.on(
       window,
       'scroll',
@@ -294,3 +327,5 @@ export class LensTrigger extends BaseComponent {
     this.#clearHideTimer();
   }
 }
+
+export const LensTrigger = PeekTrigger;

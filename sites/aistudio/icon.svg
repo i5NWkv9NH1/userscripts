@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Sora AI Studio</title>
   <defs>
     <linearGradient
             id="g"
@@ -8,14 +9,13 @@
             y2="64"
             gradientUnits="userSpaceOnUse"
         >
-      <stop offset="0%" stop-color="#3b82f6" />
-      <stop offset="50%" stop-color="#6366f1" />
-      <stop offset="100%" stop-color="#ec4899" />
+      <stop stop-color="#3b82f6" />
+      <stop offset="1" stop-color="#8b5cf6" />
     </linearGradient>
   </defs>
   <rect width="64" height="64" rx="16" fill="url(#g)" />
   <path
-        d="M32 12L36.5 27.5L52 32L36.5 36.5L32 52L27.5 36.5L12 32L27.5 27.5L32 12Z"
+        d="M32 14l4.2 12.6L49 31l-12.8 4.4L32 48l-4.2-12.6L15 31l12.8-4.4L32 14z"
         fill="#fff"
     />
 </svg>

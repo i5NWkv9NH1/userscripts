@@ -35,6 +35,6 @@
       "@scripts/*": ["./scripts/*"]
     }
   },
-  "include": ["packages/**/*", "sites/**/*", "scripts/**/*"],
+  "include": ["packages/**/*", "sites/**/*", "scripts/**/*", "tests/**/*"],
   "exclude": ["dist", "node_modules"]
 }

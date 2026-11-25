@@ -14,9 +14,26 @@ export interface ReactiveStorage<T> {
 
 const hasGMStorage = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
 
-const subscribersByKey = new Map<string, Set<(val: any) => void>>();
+const subscribersByKey = new Map<string, Set<(val: unknown) => void>>();
 
-function getSubscriberSet(storageKey: string): Set<(val: any) => void> {
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null && !Array.isArray(val);
+}
+
+// * 兼容旧版本存档：当默认值是对象时，自动把缺掉的新字段补齐
+function mergeWithDefaults<T>(raw: unknown, initialValue: T): T {
+  if (raw === null || raw === undefined) return initialValue;
+  if (isPlainObject(initialValue)) {
+    if (!isPlainObject(raw)) return initialValue;
+    return { ...initialValue, ...raw } as T;
+  }
+  if (typeof raw !== typeof initialValue) {
+    return initialValue;
+  }
+  return raw as T;
+}
+
+function getSubscriberSet(storageKey: string): Set<(val: unknown) => void> {
   let set = subscribersByKey.get(storageKey);
   if (!set) {
     set = new Set();
@@ -31,11 +48,13 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
 
   const read = (): T => {
     if (hasGMStorage) {
-      return GM_getValue<T>(storageKey, initialValue);
+      const val = GM_getValue<unknown>(storageKey, initialValue);
+      return mergeWithDefaults(val, initialValue);
     }
     try {
       const raw = localStorage.getItem(storageKey);
-      return raw !== null ? (JSON.parse(raw) as T) : initialValue;
+      if (raw === null) return initialValue;
+      return mergeWithDefaults(JSON.parse(raw), initialValue);
     } catch {
       return initialValue;
     }
@@ -67,14 +86,15 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
     subscribe(callback, signal, immediate = true) {
       if (signal.aborted) return;
 
-      subscribers.add(callback);
+      const wrapped = callback as (val: unknown) => void;
+      subscribers.add(wrapped);
       let gmListenerId: string | number | null = null;
 
       if (hasGMStorage && typeof GM_addValueChangeListener === 'function') {
         gmListenerId = GM_addValueChangeListener(storageKey, (_name, _oldVal, newVal, remote) => {
           if (remote) {
             try {
-              callback((newVal as T) ?? initialValue);
+              callback(mergeWithDefaults(newVal, initialValue));
             } catch {}
           }
         });
@@ -83,7 +103,7 @@ export function useStorage<T>(key: string, initialValue: T): ReactiveStorage<T> 
       signal.addEventListener(
         'abort',
         () => {
-          subscribers.delete(callback);
+          subscribers.delete(wrapped);
           if (subscribers.size === 0) {
             subscribersByKey.delete(storageKey);
           }

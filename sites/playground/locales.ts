@@ -1,0 +1,26 @@
+export const PLAYGROUND_DICT = {
+  'zh-CN': {
+    appName: '测试面板',
+    panelTitle: 'Sora 公共组件测试面板',
+    dragTip: '可用来测试拖拽防重叠与跨脚本快捷键冲突',
+    savedPrefix: '已保存: ',
+    memoryOnly: '不保存（刷新后归零）',
+    persistLabel: '刷新后保留数字',
+    persistHint: '关闭时清空已存数字，刷新网页归零',
+    incBtn: '数字 +1',
+    resetBtn: '清零',
+    removeTitle: '从网页移除测试面板',
+  },
+  en: {
+    appName: 'Playground',
+    panelTitle: 'Sora Shared UI Playground',
+    dragTip: 'Test edge-snap collision avoidance and cross-script shortcuts',
+    savedPrefix: 'Saved: ',
+    memoryOnly: 'Not saved (resets on reload)',
+    persistLabel: 'Remember count across reloads',
+    persistHint: 'Clears saved number when turned off',
+    incBtn: 'Count +1',
+    resetBtn: 'Reset',
+    removeTitle: 'Remove playground from page',
+  },
+} as const;

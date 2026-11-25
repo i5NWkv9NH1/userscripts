@@ -1,12 +1,11 @@
 // scripts/dev.ts
 
-import type { ServerWebSocket } from 'bun';
 import { watch } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import {
   createDevBridgeScript,
-  inlineTemplateMinifierPlugin,
+  inlineAssetMinifierPlugin,
   serializeMeta,
   type UserScriptMeta,
 } from './meta.ts';
@@ -16,9 +15,24 @@ const ROOT_DIR = resolve(import.meta.dir, '..');
 const SITES_DIR = join(ROOT_DIR, 'sites');
 const PACKAGES_DIR = join(ROOT_DIR, 'packages');
 
-const clients = new Set<ServerWebSocket<{ site: string }>>();
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Cache-Control',
+} as const;
 
-const pollWaiters = new Set<(res: Response) => void>();
+// * 按站点分组管理热更新轮询连接，改了哪个站点就只刷新哪个站点
+const pollWaitersBySite = new Map<string, Set<(res: Response) => void>>();
+const tsTranspiler = new Bun.Transpiler({ loader: 'ts' });
+
+function getSiteWaiters(site: string): Set<(res: Response) => void> {
+  let set = pollWaitersBySite.get(site);
+  if (!set) {
+    set = new Set();
+    pollWaitersBySite.set(site, set);
+  }
+  return set;
+}
 
 function createHmrClientCode(site: string): string {
   return `;(() => {
@@ -45,13 +59,20 @@ function createHmrClientCode(site: string): string {
 })();`;
 }
 
+// * 用内存转译读取站点 meta 配置，避免反复 import(?t=...) 造成模块缓存一直上涨
 async function loadSiteMeta(site: string): Promise<UserScriptMeta> {
   const metaPath = join(SITES_DIR, site, 'meta.ts');
-  if (!(await Bun.file(metaPath).exists())) {
+  const file = Bun.file(metaPath);
+  if (!(await file.exists())) {
     throw new Error(`找不到站点元数据：sites/${site}/meta.ts`);
   }
-  const mod = await import(`${metaPath}?t=${Date.now()}`);
-  return mod.meta as UserScriptMeta;
+  const source = await file.text();
+  const jsCode = tsTranspiler.transformSync(source);
+  const body = jsCode
+    .replace(/\bexport\s+const\s+meta\s*=/g, 'const meta =')
+    .replace(/\bexport\s+\{[^}]*\};?/g, '');
+  const evaluate = new Function(`${body}\nreturn meta;`) as () => UserScriptMeta;
+  return evaluate();
 }
 
 async function compileSiteInMemory(site: string): Promise<string> {
@@ -69,7 +90,7 @@ async function compileSiteInMemory(site: string): Promise<string> {
     entrypoints: [entryPath],
     target: 'browser',
     format: 'iife',
-    plugins: [inlineTemplateMinifierPlugin],
+    plugins: [inlineAssetMinifierPlugin],
     minify: false,
     sourcemap: 'inline',
   });
@@ -79,7 +100,12 @@ async function compileSiteInMemory(site: string): Promise<string> {
     throw new Error(`编译失败：\n${errText}`);
   }
 
-  const code = await result.outputs[0]!.text();
+  const output = result.outputs[0];
+  if (!output) {
+    throw new Error('编译没有生成输出文件');
+  }
+
+  const code = await output.text();
   const elapsed = (performance.now() - startTime).toFixed(2);
   console.info(`[JIT] 站点「${site}」实时编译完成，耗时 ${elapsed}ms`);
 
@@ -87,45 +113,78 @@ async function compileSiteInMemory(site: string): Promise<string> {
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+const dirtySites = new Set<string>();
+let dirtyAll = false;
 
-function setupWatcher(dir: string) {
+function notifyChangedWaiters(): void {
+  const targets = dirtyAll ? Array.from(pollWaitersBySite.keys()) : Array.from(dirtySites);
+  dirtyAll = false;
+  dirtySites.clear();
+
+  for (const site of targets) {
+    const waiters = pollWaitersBySite.get(site);
+    if (!waiters || waiters.size === 0) continue;
+    for (const resolvePoll of waiters) {
+      resolvePoll(
+        new Response('reload', {
+          status: 200,
+          headers: {
+            ...CORS_HEADERS,
+            'Cache-Control': 'no-cache, no-store',
+          },
+        })
+      );
+    }
+    waiters.clear();
+  }
+}
+
+function setupWatcher(dir: string, scope: 'sites' | 'packages') {
   watch(dir, { recursive: true }, (_event, filename) => {
     if (!filename || (!filename.endsWith('.ts') && !filename.endsWith('.css'))) return;
+
+    if (scope === 'packages') {
+      dirtyAll = true;
+    } else {
+      const siteName = filename.split(sep)[0];
+      if (siteName) dirtySites.add(siteName);
+    }
+
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      console.info(`[HMR] 检测到变更：${filename}，正在通知浏览器刷新...`);
-      for (const resolvePoll of pollWaiters) {
-        resolvePoll(
-          new Response('reload', {
-            headers: {
-              'Access-Control-Allow-Origin': '*',
-              'Cache-Control': 'no-cache, no-store',
-            },
-          })
-        );
-      }
-      pollWaiters.clear();
+      console.info(`[HMR] 检测到文件改动：${filename}，正在通知对应页面刷新...`);
+      notifyChangedWaiters();
     }, 50);
   });
 }
 
-setupWatcher(SITES_DIR);
-setupWatcher(PACKAGES_DIR);
+setupWatcher(SITES_DIR, 'sites');
+setupWatcher(PACKAGES_DIR, 'packages');
 
-Bun.serve<{ site: string }>({
+Bun.serve({
   port: PORT,
-  async fetch(req, _server) {
+  async fetch(req) {
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+    if (req.method !== 'GET') {
+      return new Response('Method Not Allowed', { status: 405, headers: CORS_HEADERS });
+    }
+
     const url = new URL(req.url);
 
     if (url.pathname === '/__hmr_poll') {
+      const site = url.searchParams.get('site') || 'default';
+      const waiters = getSiteWaiters(site);
       return new Promise<Response>((resolvePoll) => {
-        pollWaiters.add(resolvePoll);
+        waiters.add(resolvePoll);
         setTimeout(() => {
-          if (pollWaiters.has(resolvePoll)) {
-            pollWaiters.delete(resolvePoll);
+          if (waiters.has(resolvePoll)) {
+            waiters.delete(resolvePoll);
             resolvePoll(
               new Response('keepalive', {
-                headers: { 'Access-Control-Allow-Origin': '*' },
+                status: 200,
+                headers: CORS_HEADERS,
               })
             );
           }
@@ -136,14 +195,21 @@ Bun.serve<{ site: string }>({
     const devBridgeMatch = url.pathname.match(/^\/([a-zA-Z0-9_-]+)\.dev\.user\.js$/);
     if (devBridgeMatch?.[1]) {
       const site = devBridgeMatch[1];
-      const meta = await loadSiteMeta(site);
-      const bridgeCode = createDevBridgeScript(meta, site, PORT);
-      return new Response(bridgeCode, {
-        headers: {
-          'Content-Type': 'application/javascript; charset=utf-8',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-        },
-      });
+      try {
+        const meta = await loadSiteMeta(site);
+        const bridgeCode = createDevBridgeScript(meta, site, PORT);
+        return new Response(bridgeCode, {
+          status: 200,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return new Response(msg, { status: 404, headers: CORS_HEADERS });
+      }
     }
 
     const bundleMatch = url.pathname.match(/^\/([a-zA-Z0-9_-]+)\.user\.js$/);
@@ -152,10 +218,11 @@ Bun.serve<{ site: string }>({
       try {
         const bundle = await compileSiteInMemory(site);
         return new Response(bundle, {
+          status: 200,
           headers: {
+            ...CORS_HEADERS,
             'Content-Type': 'application/javascript; charset=utf-8',
             'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Access-Control-Allow-Origin': '*',
           },
         });
       } catch (err) {
@@ -163,31 +230,22 @@ Bun.serve<{ site: string }>({
         console.error(`[JIT Error] ${msg}`);
         return new Response(`console.error(${JSON.stringify(msg)});`, {
           status: 500,
-          headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/javascript; charset=utf-8',
+          },
         });
       }
     }
 
-    return new Response(
-      'Sora JIT 网关运行中。\n开发态请在暴力猴安装：http://localhost:3000/:site.dev.user.js',
-      { status: 200 }
-    );
-  },
-  websocket: {
-    open(ws) {
-      clients.add(ws);
-    },
-    close(ws) {
-      clients.delete(ws);
-    },
-    message() {},
+    return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
   },
 });
 
 const siteEntries = await readdir(SITES_DIR, { withFileTypes: true });
 const siteNames = siteEntries.filter((e) => e.isDirectory()).map((e) => e.name);
 
-console.info(`[sora-dev] JIT 开发网关已启动！（按住 Alt/Cmd + 鼠标左键即可直接安装）`);
+console.info('[sora-dev] 本地开发服务已启动，在油猴插件中打开以下链接即可安装：');
 for (const site of siteNames) {
   console.info(`  -> [${site}] http://localhost:${PORT}/${site}.dev.user.js`);
 }

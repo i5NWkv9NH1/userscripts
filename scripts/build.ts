@@ -1,6 +1,6 @@
 import { mkdir, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { inlineTemplateMinifierPlugin, serializeMeta, type UserScriptMeta } from './meta.ts';
+import { inlineAssetMinifierPlugin, serializeMeta, type UserScriptMeta } from './meta.ts';
 
 const ROOT_DIR = resolve(import.meta.dir, '..');
 const SITES_DIR = join(ROOT_DIR, 'sites');
@@ -21,14 +21,20 @@ async function buildAll() {
     if (!(await Bun.file(entryPath).exists())) continue;
 
     const metaModule = await import(metaPath);
-    const meta: UserScriptMeta = metaModule.meta;
+    const baseMeta: UserScriptMeta = metaModule.meta;
+    const now = new Date();
+    const stamp = now.toISOString().replace(/[-:T]/g, '').slice(0, 12);
+    const meta: UserScriptMeta =
+      process.env.SORA_VERSION_STAMP === '1'
+        ? { ...baseMeta, version: `${baseMeta.version}.${stamp}` }
+        : baseMeta;
     const banner = serializeMeta(meta, join(SITES_DIR, site));
 
     const result = await Bun.build({
       entrypoints: [entryPath],
       target: 'browser',
       format: 'iife',
-      plugins: [inlineTemplateMinifierPlugin],
+      plugins: [inlineAssetMinifierPlugin],
       minify: {
         whitespace: true,
         syntax: true,
@@ -37,29 +43,30 @@ async function buildAll() {
     });
 
     if (!result.success) {
-      console.error(`[Build] 站点「${site}」构建失败：`, result.logs);
+      console.error(`[Build] 站点「${site}」打包失败：`, result.logs);
       process.exit(1);
     }
 
-    // const jsContent = (await result.outputs[0]!.text()).trim();
-    // const rawJs = (await result.outputs[0]!.text()).trim();
-    // 经过 Bun.build 压缩后，所有剩余的真换行均来自反引号模板内部，直接全局转义为 \n 即可实现 100% 纯单行
-    // # 为生产产物包裹 customElements 环境自适应提权壳
-    const rawJs = (await result.outputs[0]!.text()).trim();
-    const flatJs = rawJs.replace(/\r?\n/g, '\\n');
-    // # 当处于 content 隔离沙盒（customElements === null）时，自动通过 GM_addElement 穿透 CSP 挂载至主页面上下文执行
-    const jsContent = `(()=>{const b=()=>{${flatJs}};if(typeof customElements!=="undefined"&&customElements!==null){b()}else if(typeof GM_addElement==="function"){GM_addElement(document.head||document.documentElement,"script",{textContent:"("+b.toString()+")()"})}})();`;
+    const output = result.outputs[0];
+    if (!output) {
+      console.error(`[Build] 站点「${site}」没有生成输出文件`);
+      process.exit(1);
+    }
+
+    // * 直接输出打包后的标准自执行脚本，保留油猴沙盒内的 GM_* 接口权限，并附上编译时间说明
+    const jsContent = (await output.text()).trim();
+    const buildNote = `// Build: ${now.toISOString()}`;
     const outFileName = `@sora-${site}.userscript.js`;
     const outPath = join(DIST_DIR, outFileName);
-    await Bun.write(outPath, `${banner}\n${jsContent}\n`);
+    await Bun.write(outPath, `${banner}\n${buildNote}\n${jsContent}\n`);
 
     const sizeKB = (Buffer.byteLength(jsContent, 'utf8') / 1024).toFixed(2);
     const cost = (performance.now() - siteStart).toFixed(2);
-    console.info(`[Build] 极致压缩完成：dist/${outFileName} （体积 ${sizeKB} KB，耗时 ${cost}ms）`);
+    console.info(`[Build] 打包完成：dist/${outFileName}（体积 ${sizeKB} KB，耗时 ${cost}ms）`);
   }
 
   const totalCost = (performance.now() - totalStart).toFixed(2);
-  console.info(`[Build] 全部站点打包完毕，总耗时 ${totalCost}ms`);
+  console.info(`[Build] 全部脚本打包完成，总耗时 ${totalCost}ms`);
 }
 
 await buildAll();
